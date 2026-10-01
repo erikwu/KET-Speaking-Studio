@@ -1,84 +1,52 @@
-# Qwen Image Studio
+# KET Speaking Studio · 本地 AI 练习工具
 
-## KET Speaking
+本项目提供两个独立的本地 Web 服务：KET 英语跟读练习（8788）和 Qwen 图片生成工作室（8787）。两个服务都只监听 `127.0.0.1`，仅供本机浏览器访问。
 
-Apple Silicon Mac 新机器可双击项目根目录的 [`install.command`](install.command)，自动安装语音与配图模型、准备本地运行环境并启动跟读 Web App。完整步骤和系统要求见 [`speech/README.md`](speech/README.md)。
+## 两个服务分别做什么
 
-在本机通过浏览器使用 Qwen-Image-2.1 MLX 模型生成图片。页面和服务只监听 `127.0.0.1`；提示词、参考图和生成图像都留在本机。
+### KET Speaking 跟读练习 · 8788
 
-## 环境要求
+打开 <http://127.0.0.1:8788>。选择本机的 Markdown 练习材料后，页面会按 Part 1 / Phase 1、Part 1 / Phase 2、Part 2 的顺序整理问答。点击句子即可用本地 Qwen3-TTS 模型生成并播放语音，也可以配置基础音色、问句语气和回答语气标签。
 
-- Apple Silicon Mac 和可用的 MLX / Metal 环境
-- 项目内已安装 mflux 的 `.venv`
-- Node.js 22 或更新版本
+页面还支持为整份材料生成本地离线语音缓存，以及为 Part 2 对话情景生成配图。配图由本机 Qwen Image 模型生成；这些功能都由 8788 服务调用，不需要另外打开 8787 页面。练习材料、语音缓存和情景图片保存在本机 `outputs/speech-practice/`。
+
+### Qwen Image 图片生成工作室 · 8787
+
+打开 <http://127.0.0.1:8787>。这是独立的图片生成页面，可配置提示词、负面提示词、尺寸、步数、Seed 等参数，也可选择一张本地图片作为 img2img 初始图。生成结果可在页面预览和下载，任务文件保存在 `outputs/web-ui/`。
+
+## 首次安装
+
+适用于 Apple Silicon Mac。双击项目根目录的 [`install.command`](install.command)，按提示完成依赖和本地模型安装。安装脚本会启动 KET Speaking 服务并打开 8788 页面。首次安装需要下载约 25 GB 的语音与图片模型，建议预留至少 40 GB 可用空间。系统要求、下载过程和模型许可说明见 [`speech/README.md`](speech/README.md)。
 
 ## 启动服务
 
-在项目根目录打开终端并运行：
+安装完成后，如需同时使用两个服务，在项目根目录分别打开两个终端窗口，并保持窗口运行：
+
+**终端窗口 1：KET Speaking 跟读练习（8788）**
+
+```sh
+npm run start:tts
+```
+
+浏览器打开 <http://127.0.0.1:8788>。也可以双击 `install.command` 启动此服务。
+
+**终端窗口 2：Qwen Image 图片生成工作室（8787）**
 
 ```sh
 npm start
 ```
 
-终端显示 `Qwen Image Studio is ready at http://127.0.0.1:8787` 表示服务已启动。保持这个终端窗口打开，服务运行期间不要关闭它。
+浏览器打开 <http://127.0.0.1:8787>。这两个进程相互独立；关闭某个终端只会停止对应服务。
 
-默认优先使用完整的 `models/Qwen-Image-2.1-MLX-4bit-Heretic`；该目录不可用时，会回退到 `models/Qwen-Image-2.1-MLX-4bit`。如需选择其他兼容模型目录，可在启动时设置：
-
-```sh
-MFLUX_MODEL_PATH="models/你的模型目录" npm start
-```
-
-## 打开页面
-
-在浏览器访问：<http://127.0.0.1:8787>
-
-不要把服务地址改成 `0.0.0.0` 或转发到公网。默认监听回环地址，只供这台电脑访问。
-
-## 查询服务状态
-
-在另一个终端窗口执行：
-
-```sh
-curl -fsS http://127.0.0.1:8787/api/config
-```
-
-服务正常时会返回 JSON，其中：
-
-- `modelReady: true` 表示模型目录结构完整。
-- `cliReady: true` 表示项目内的 mflux 生成命令存在。
-- `modelName` 和 `modelPath` 显示当前使用的模型。
-
-如果请求失败，先确认启动服务的终端还开着。也可检查 8787 端口是否有服务监听：
-
-```sh
-lsof -nP -iTCP:8787 -sTCP:LISTEN
-```
+运行环境需要 Node.js 22 或更新版本，以及安装脚本准备的项目 `.venv` 和模型。手动启动前请先完成 [`install.command`](install.command) 的安装步骤。
 
 ## 关闭服务
 
-在运行 `npm start` 的终端按 **Control-C**。停止后，浏览器刷新页面会无法连接服务。
+在对应服务的终端窗口按 **Control-C**。8788 和 8787 分别运行，因此需要分别停止。
 
-如果忘记哪个终端启动了服务，可先运行 `lsof -nP -iTCP:8787 -sTCP:LISTEN` 找到监听进程的 PID，再只结束该 PID：
+## 模型与本地文件
 
-```sh
-kill <PID>
-```
-
-不要用 `killall node`，它会一并关闭这台电脑上其他 Node.js 程序。
-
-如果 8787 已被另一个程序占用，可以改用其他端口启动：
-
-```sh
-PORT=8788 npm start
-```
-
-此时页面地址为 <http://127.0.0.1:8788>，查询状态也要改用该端口。
-
-## 图片与模型参数
-
-- 支持提示词、负面提示词、步数、Seed、宽高、Guidance、输出格式、低内存模式和 VAE 分块解码。
-- 可选一张 PNG、JPEG 或 WebP 初始图。当前本地 mflux checkpoint 使用 img2img 初始图与影响强度，不支持多图指令编辑。
-- 宽高需为 16 的倍数。Guidance 大于 1 时需填写负面提示词。
-- 生成图片和任务输入保存在 `outputs/web-ui/`。
-
-更详细的模型参数说明见 [`web/README.md`](web/README.md)。
+- 8788 使用 `models/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16` 生成语音，并使用 Qwen Image 模型生成 Part 2 情景图。
+- 8787 使用 Qwen Image 2.1 MLX 4-bit 模型生成图片；默认优先使用 `models/Qwen-Image-2.1-MLX-4bit-Heretic`，否则使用 `models/Qwen-Image-2.1-MLX-4bit`。
+- 模型文件、语音缓存、输入材料和生成图片不纳入 Git 提交。模型的许可说明见 [`speech/README.md`](speech/README.md)。
+- 图片工作室的功能与参数说明见 [`web/README.md`](web/README.md)。
