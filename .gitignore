@@ -1,0 +1,24 @@
+# Local model checkpoints and Hugging Face download state
+/models/
+/.hf-cache/
+/.hf-home/
+/.hf-xet/
+
+# Runtime outputs, generated speech and scenario images
+/outputs/
+
+# Python and package-manager environments/caches
+/.venv*/
+/.uv-cache/
+/node_modules/
+__pycache__/
+*.py[cod]
+
+# Local assistant state, OS metadata, logs and secrets
+/.learnings/
+/.superpowers/
+**/.DS_Store
+*.log
+.env
+.env.*
+!.env.example

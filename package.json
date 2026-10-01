@@ -1,0 +1,9 @@
+{
+  "name": "qwen-image-local-studio",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-strip-types web/server.ts",
+    "start:tts": "node --experimental-strip-types speech/server.ts"
+  }
+}
