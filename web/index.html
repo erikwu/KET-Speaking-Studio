@@ -25,13 +25,19 @@
         <section class="controls-panel">
           <div class="panel-heading">
             <div>
-              <p class="eyebrow">MLX · QWEN IMAGE 2.1</p>
-              <h1>把想法变成图像</h1>
-              <p class="subheading">提示词和参数在本机处理，生成结果保存在当前项目中。</p>
+              <p class="eyebrow" id="studio-kicker">MLX · QWEN IMAGE 2.1</p>
+              <h1 id="studio-title">把想法变成图像</h1>
+              <p class="subheading" id="studio-subtitle">提示词和参数在本机处理，生成结果保存在当前项目中。</p>
             </div>
-            <span class="version-tag">4-bit</span>
+            <span id="model-quantization" class="version-tag">4-bit</span>
           </div>
 
+          <div class="mode-switch" role="group" aria-label="生成模式">
+            <button id="image-mode-button" class="mode-button is-active" type="button" aria-pressed="true">图像</button>
+            <button id="video-mode-button" class="mode-button" type="button" aria-pressed="false">图生视频</button>
+          </div>
+
+          <div id="image-panel" class="mode-panel">
           <form id="generate-form">
             <section class="form-section reference-section">
               <div class="section-title-row">
@@ -92,6 +98,60 @@
             </button>
             <p class="run-note"><span class="lock-icon">⌑</span> 图片只在本机处理；生成任务会占用本机统一内存。</p>
           </form>
+          </div>
+
+          <div id="video-panel" class="mode-panel hidden">
+            <div id="video-readiness" class="readiness-note" role="status">正在检查 Wan 视频模型…</div>
+            <form id="video-form">
+              <section class="form-section reference-section">
+                <div class="section-title-row">
+                  <label class="field-label" for="video-reference-file">起始图 <span class="required">必填 · 单张</span></label>
+                  <span class="supported-formats">PNG · JPG · WEBP</span>
+                </div>
+                <label class="upload-zone" id="video-upload-zone" for="video-reference-file">
+                  <input id="video-reference-file" type="file" accept="image/png,image/jpeg,image/webp" />
+                  <span class="upload-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M12 16V4m0 0L7.5 8.5M12 4l4.5 4.5M5 14.5v4A1.5 1.5 0 0 0 6.5 20h11a1.5 1.5 0 0 0 1.5-1.5v-4" /></svg>
+                  </span>
+                  <span class="upload-copy"><b>选择起始图</b><small>也可以拖放图片到这里，最大 24 MB</small></span>
+                  <span class="upload-action">浏览</span>
+                </label>
+                <div id="video-reference-preview" class="reference-preview hidden">
+                  <img id="video-reference-image" alt="图生视频起始图预览" />
+                  <div class="reference-meta"><b id="video-reference-name"></b><small id="video-reference-size"></small></div>
+                  <button id="remove-video-reference" class="icon-button" type="button" aria-label="移除起始图">×</button>
+                </div>
+                <p class="helper-text">模型会以这张图片作为视频第一帧，在本机生成 MP4。</p>
+              </section>
+
+              <section class="form-section">
+                <div class="section-title-row"><label class="field-label" for="video-prompt">提示词 <span class="required">必填</span></label><span id="video-prompt-count" class="char-count">0 / 10,000</span></div>
+                <textarea id="video-prompt" name="prompt" rows="5" maxlength="10000" placeholder="描述主体如何运动、镜头如何移动，以及场景中的变化…" required></textarea>
+                <p class="helper-text">写出动作、镜头运动和环境变化，帮助模型生成连贯的视频。</p>
+              </section>
+
+              <details class="advanced-section" open>
+                <summary><span>视频参数</span><span class="summary-note">Wan 2.2 TI2V · 本机 MLX</span></summary>
+                <div class="parameter-grid">
+                  <label class="parameter-field"><span>宽度 <span class="param-hint">32 的倍数</span></span><input id="video-width" type="number" min="256" max="4096" step="32" value="1280" /></label>
+                  <label class="parameter-field"><span>高度 <span class="param-hint">32 的倍数</span></span><input id="video-height" type="number" min="256" max="4096" step="32" value="704" /></label>
+                  <label class="parameter-field"><span>视频长度</span><select id="video-frames"><option value="41" selected>41 帧 · 约 1.7 秒</option><option value="81">81 帧 · 约 3.4 秒</option><option value="121">121 帧 · 约 5 秒</option></select></label>
+                  <label class="parameter-field"><span>步数 <span class="param-hint">越高越慢</span></span><input id="video-steps" type="number" min="1" max="100" step="1" value="20" /></label>
+                  <label class="parameter-field"><span>Guidance scale</span><input id="video-guidance" type="number" min="0" max="20" step="0.1" value="5" /></label>
+                  <label class="parameter-field"><span>Seed <span class="param-hint">留空随机</span></span><input id="video-seed" type="number" min="0" max="4294967295" step="1" placeholder="随机" /></label>
+                  <label class="parameter-field parameter-wide"><span>输出帧率</span><div class="fixed-value">24 fps <span>模型固定</span></div></label>
+                </div>
+                <label class="field-label negative-label" for="video-negative-prompt">负面提示词 <span class="optional">可选</span></label>
+                <textarea id="video-negative-prompt" name="negativePrompt" rows="2" maxlength="5000" placeholder="想避免出现的内容…留空时使用模型默认值"></textarea>
+              </details>
+
+              <div id="video-form-error" class="form-error hidden" role="alert"></div>
+              <button id="video-generate-button" class="generate-button" type="submit" disabled>
+                <span class="button-spark" aria-hidden="true">✳</span><span>生成视频</span><span class="button-arrow">↗</span>
+              </button>
+              <p class="run-note"><span class="lock-icon">⌑</span> 图片和提示词只在本机处理；视频生成会占用本机统一内存。</p>
+            </form>
+          </div>
         </section>
 
         <section class="result-panel" aria-live="polite">
@@ -111,11 +171,12 @@
               <button id="cancel-button" class="text-button" type="button" disabled>停止任务</button>
             </div>
             <img id="result-image" class="result-image hidden" alt="本地生成的图像" />
+            <video id="result-video" class="result-video hidden" controls playsinline preload="metadata" aria-label="本地生成的视频"></video>
             <div id="failed-state" class="failed-state hidden"><div class="failure-mark">!</div><h3 id="failure-title">生成失败</h3><p id="failure-message"></p><details class="error-details"><summary>查看 mflux 输出</summary><pre id="failure-log"></pre></details><button id="retry-button" class="secondary-button" type="button">返回修改参数</button></div>
           </div>
           <div id="result-footer" class="result-footer hidden">
             <div class="result-meta"><span class="success-check">✓</span><div><b>生成完成</b><small id="result-details"></small></div></div>
-            <a id="download-button" class="download-button" href="#" download><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M5 20h14" /></svg>下载图像</a>
+            <a id="download-button" class="download-button" href="#" download aria-label="下载生成的图像"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M5 20h14" /></svg><span id="download-label">下载图像</span></a>
           </div>
           <div class="canvas-caption"><span><i></i> LOCAL MLX RENDER</span><span>输出自动保存到 <code>outputs/web-ui/</code></span></div>
         </section>
