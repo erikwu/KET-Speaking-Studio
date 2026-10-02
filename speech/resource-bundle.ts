@@ -254,7 +254,7 @@ async function streamEntryToFile(input: {
   if (bytes !== input.expectedBytes) fail(`Resource bundle entry length mismatch: ${input.entryName}.`);
   if (hash.digest("hex") !== input.expectedSha256) fail(`Resource bundle entry hash mismatch: ${input.entryName}.`);
   const leading = Buffer.concat(prefix);
-  if (input.signature === "wav" && (leading.length < 12 || leading.toString("ascii", 0, 4) !== "RIFF" || leading.toString("ascii", 8, 12) !== "WAVE")) {
+  if (input.signature === "wav" && (bytes < 44 || leading.length < 12 || leading.toString("ascii", 0, 4) !== "RIFF" || leading.toString("ascii", 8, 12) !== "WAVE")) {
     fail(`Resource bundle WAV signature is invalid: ${input.entryName}.`);
   }
   if (input.signature === "png" && (leading.length < 8 || !leading.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))) {

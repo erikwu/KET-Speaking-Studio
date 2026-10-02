@@ -123,9 +123,9 @@ async function createImageModelFixture(root: string): Promise<string> {
   return modelPath;
 }
 
-async function parseFixture(baseUrl: string, root: string) {
-  const filePath = path.join(root, "KET questions.md");
-  await writeFile(filePath, markdown);
+async function parseFixture(baseUrl: string, root: string, markdownContent: string | Buffer = markdown) {
+  const filePath = path.join(root, typeof markdownContent === "string" && markdownContent === markdown ? "KET questions.md" : "Duplicate scenarios.md");
+  await writeFile(filePath, markdownContent);
   const response = await fetch(`${baseUrl}/api/parse`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -162,7 +162,7 @@ async function writeCompleteCache(baseUrl: string, outputDirectory: string, file
   await writeFile(path.join(imageDirectory, "picture-1.png"), png);
 }
 
-async function createImportBundle(root: string, parsed: any, options: { version?: number; badHash?: boolean; reverseTurns?: boolean; includeImage?: boolean } = {}) {
+async function createImportBundle(root: string, parsed: any, options: { version?: number; badHash?: boolean; reverseTurns?: boolean; includeImage?: boolean; markdownContent?: string | Buffer } = {}) {
   const staging = path.join(root, `bundle-source-${Math.random().toString(16).slice(2)}`);
   const archivePath = path.join(root, `import-${Math.random().toString(16).slice(2)}.ketpack.zip`);
   const turns = parsed.sections.flatMap((section: any) => section.groups.flatMap((group: any) => group.turns));
@@ -174,24 +174,25 @@ async function createImportBundle(root: string, parsed: any, options: { version?
     sha256: options.badHash && turn.id === turns[0].id ? "d".repeat(64) : sha256(wav),
   }));
   if (options.reverseTurns) clips.reverse();
-  const group = parsed.sections.find((section: any) => section.id === "part2").groups[0];
-  const images = options.includeImage === false ? [] : [{
+  const groups = parsed.sections.find((section: any) => section.id === "part2").groups;
+  const images = options.includeImage === false ? [] : groups.map((group: any) => ({
     groupId: group.id,
     variant: 1,
     entry: `scenario-images/${group.id}-1.png`,
     byteLength: png.length,
     sha256: sha256(png),
-  }];
+  }));
+  const markdownBytes = Buffer.from(options.markdownContent ?? markdown);
   const manifest = {
     format: "ket-speaking-resource-bundle",
     version: options.version ?? 1,
-    material: { entry: "material.md", filename: "KET questions.md", byteLength: Buffer.byteLength(markdown), sha256: sha256(markdown) },
+    material: { entry: "material.md", filename: "KET questions.md", byteLength: markdownBytes.length, sha256: sha256(markdownBytes) },
     speech: { profile: "default", profileKey: "a".repeat(64), total: turns.length, clips },
     images,
   };
-  const entries: Record<string, Buffer> = { "material.md": Buffer.from(markdown) };
+  const entries: Record<string, Buffer> = { "material.md": markdownBytes };
   for (const turn of turns) entries[`audio/${turn.id}.wav`] = wav;
-  if (images.length) entries[images[0]!.entry] = png;
+  for (const image of images) entries[image.entry] = png;
   for (const [entry, content] of Object.entries({ "manifest.json": Buffer.from(JSON.stringify(manifest)), ...entries })) {
     const filePath = path.join(staging, entry);
     await mkdir(path.dirname(filePath), { recursive: true });
@@ -313,6 +314,30 @@ test("importResourceBundle_allowsPartialImages", async () => {
     assert.deepEqual(await readFile(existingOtherImage), Buffer.from("keep this other scenario image"));
     const absentVariant = await fetch(`${baseUrl}${imageState.imageUrls[0].replace(/\/1$/, "/2")}`);
     assert.equal(absentVariant.status, 404);
+  });
+});
+
+test("importResourceBundle_coalescesIdenticalScenarioImageTargets", async () => {
+  await withServer(async ({ root, baseUrl }) => {
+    const repeatedScenario = Buffer.from(`# Part 1 Phase 1\n**Q: Ready?**\n**A: Yes.**\n\n# Part 2\n1. **Situation: At the park**\n**Q: What can you see?**\n**A: I can see a swing.**\n\n2. **Situation: At the park**\n**Q: What can you see?**\n**A: I can see a swing.**\n`);
+    const { parsed } = await parseFixture(baseUrl, root, repeatedScenario);
+    const groups = parsed.sections.find((section: any) => section.id === "part2").groups;
+    assert.equal(groups.length, 2);
+    const archivePath = await createImportBundle(root, parsed, { markdownContent: repeatedScenario });
+    const { response, body } = await importBundle(baseUrl, archivePath);
+    assert.equal(response.status, 200, body.error);
+
+    const imageLists = await Promise.all(groups.map(async (group: any) => {
+      const dialogue = group.turns.map((turn: any) => `${turn.role}: ${turn.text}`).join("\n");
+      const query = new URLSearchParams({ filePath: body.filePath, context: group.context, dialogue });
+      const imageResponse = await fetch(`${baseUrl}/api/scenario-images?${query}`);
+      return (await imageResponse.json() as any).imageUrls;
+    }));
+    assert.deepEqual(imageLists[0], imageLists[1]);
+    assert.equal(imageLists[0].length, 1);
+    const imageResponse = await fetch(`${baseUrl}${imageLists[0][0]}`);
+    assert.equal(imageResponse.status, 200);
+    assert.deepEqual(Buffer.from(await imageResponse.arrayBuffer()), png);
   });
 });
 

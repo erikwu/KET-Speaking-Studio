@@ -139,6 +139,10 @@ test("readResourceBundleArchive_roundTripsValidBundle", async () => {
 
 test("readResourceBundleArchive_rejectsUnsupportedVersionAndBadMedia", async () => {
   const { readResourceBundleArchive } = await api(["readResourceBundleArchive"]);
+  const shortWav = Buffer.alloc(12);
+  shortWav.write("RIFF", 0, "ascii");
+  shortWav.writeUInt32LE(4, 4);
+  shortWav.write("WAVE", 8, "ascii");
   const invalidBundles = [
     { name: "version", manifest: manifestFor({ version: 2 }) },
     { name: "material-hash", manifest: manifestFor({ markdownSha: "c".repeat(64) }) },
@@ -146,6 +150,7 @@ test("readResourceBundleArchive_rejectsUnsupportedVersionAndBadMedia", async () 
     { name: "audio-hash", manifest: manifestFor({ wavSha: "d".repeat(64) }) },
     { name: "audio-length", manifest: manifestFor({ wavBytes: wav.length + 1 }) },
     { name: "bad-wav", manifest: manifestFor(), replaceWav: Buffer.from("not a wav") },
+    { name: "short-wav", manifest: manifestFor({ wavBytes: shortWav.length, wavSha: sha256(shortWav) }), replaceWav: shortWav },
     { name: "bad-png", manifest: manifestFor(), replacePng: Buffer.from("not a png") },
   ];
   await withTempDirectory(async (root) => {

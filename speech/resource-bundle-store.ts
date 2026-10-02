@@ -57,7 +57,15 @@ export async function promoteResourceBundleFiles(input: {
         await fileOps.rename(backup.backupPath, backup.destinationPath);
       } catch (rollbackError) { rollbackErrors.push(rollbackError); }
     }
-    if (rollbackErrors.length) throw new AggregateError([error, ...rollbackErrors], "Resource bundle promotion failed and rollback was incomplete.");
+    if (rollbackErrors.length) {
+      const recoveryError = Object.assign(
+        new AggregateError([error, ...rollbackErrors], `Resource bundle promotion failed and rollback was incomplete. Recovery files were preserved at ${backupDirectory}.`),
+        { recoveryDirectory: backupDirectory },
+      );
+      throw recoveryError;
+    }
+    try { await fileOps.rm(backupDirectory, { recursive: true, force: true }); }
+    catch { /* A fully restored rollback can leave only harmless backups. */ }
     throw error;
   }
 

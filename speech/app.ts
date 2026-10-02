@@ -1,5 +1,5 @@
 // @ts-check
-import { getCacheActionState } from "./cache-action-state.ts";
+import { getCacheActionState, resolvePlaybackMode } from "./cache-action-state.ts";
 
 /** @typedef {{id:string,role:"Q"|"A"|"B",voiceRole:"question"|"answer",text:string,translation:string}} Turn */
 /** @typedef {{id:string,number:number,context:string,turns:Turn[]}} Group */
@@ -173,12 +173,20 @@ async function loadConfig() {
   }
   const playbackSelect = /** @type {HTMLSelectElement} */ $("#playback-mode");
   playbackSelect.disabled = !modelAvailable;
+  let offlineOnlyOption = playbackSelect.querySelector('option[value="offline-only"]');
   if (!modelAvailable) {
-    playbackMode = "offline-only";
+    if (!offlineOnlyOption) {
+      offlineOnlyOption = document.createElement("option");
+      offlineOnlyOption.value = "offline-only";
+      offlineOnlyOption.textContent = "仅播放离线语音";
+      playbackSelect.append(offlineOnlyOption);
+    }
+    playbackMode = resolvePlaybackMode(playbackMode, modelAvailable);
     playbackSelect.value = playbackMode;
     $("#playback-mode-note").textContent = "当前没有本地语音模型：只播放已导入的离线语音，缺少的句子会提示不可用。音色和语气标签不会影响离线语音。";
   } else {
-    if (playbackMode === "offline-only") playbackMode = "realtime";
+    offlineOnlyOption?.remove();
+    playbackMode = resolvePlaybackMode(playbackMode, modelAvailable);
     playbackSelect.value = playbackMode;
     $("#playback-mode-note").textContent = "缓存任务在后台逐句生成，可继续练习。离线语音使用生成时保存的音色；重新生成完成后才会替换旧缓存。";
   }
@@ -737,7 +745,7 @@ $("#bundle-file").addEventListener("change", (event) => {
 });
 $("#export-bundle").addEventListener("click", () => void exportResourceBundle());
 $("#playback-mode").addEventListener("change", (event) => {
-  playbackMode = /** @type {HTMLSelectElement} */ (event.currentTarget).value === "offline-first" ? "offline-first" : "realtime";
+  playbackMode = resolvePlaybackMode(/** @type {HTMLSelectElement} */ (event.currentTarget).value, modelAvailable);
   localStorage.setItem(PLAYBACK_MODE_KEY, playbackMode);
   $("#playback-status").textContent = playbackMode === "offline-first" ? "离线优先；缺失语音时使用实时合成" : playbackMode === "offline-only" ? "仅播放离线语音" : "实时合成模式";
 });

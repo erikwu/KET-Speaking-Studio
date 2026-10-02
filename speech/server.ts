@@ -1150,6 +1150,7 @@ const server = createServer(async (req, res) => {
         { stagedPath: stagedOfflineDirectory, destinationPath: OFFLINE_CACHE_DIR },
         { stagedPath: stagedMaterialPath, destinationPath: importedMaterialPath },
       ];
+      const imageMoves = new Map<string, { stagedPath: string; destinationPath: string; sha256: string }>();
       for (const image of bundle.manifest.images) {
         const group = part2Groups.get(image.groupId);
         if (!group) throw new Error(`资源包配图关联了不存在的 Part 2 情景：${image.groupId}。`);
@@ -1158,13 +1159,21 @@ const server = createServer(async (req, res) => {
         const context = group.context || `口语练习情景 ${group.number}`;
         const dialogue = group.turns.map((turn) => `${turn.role}: ${turn.text}`).join("\n");
         const scenarioKey = illustrationKey(importedMaterialPath, context, dialogue);
-        moves.push({
+        const destinationPath = path.join(ILLUSTRATION_DIR, scenarioKey, `picture-${image.variant}.png`);
+        const previousImage = imageMoves.get(destinationPath);
+        if (previousImage) {
+          if (previousImage.sha256 !== image.sha256) throw new Error("重复情景映射到同一张本地配图，但资源包中的图片内容不同。");
+          continue;
+        }
+        imageMoves.set(destinationPath, {
           stagedPath: sourcePath,
-          destinationPath: path.join(ILLUSTRATION_DIR, scenarioKey, `picture-${image.variant}.png`),
+          destinationPath,
+          sha256: image.sha256,
         });
       }
+      moves.push(...[...imageMoves.values()].map(({ stagedPath, destinationPath }) => ({ stagedPath, destinationPath })));
 
-      await promoteResourceBundleFiles({ moves, backupDirectory: path.join(temporaryDirectory, "backups") });
+      await promoteResourceBundleFiles({ moves, backupDirectory: path.join(AUDIO_DIR, `.resource-import-recovery-${randomUUID()}`) });
       const itemCount = turns.length;
       json(res, 200, { filePath: importedMaterialPath, materialKey, sections, itemCount });
     } catch (error) {
