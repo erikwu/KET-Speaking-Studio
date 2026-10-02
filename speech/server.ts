@@ -11,7 +11,8 @@ import { fileURLToPath } from "node:url";
 import { readResourceBundleArchive, writeResourceBundleArchive, type ResourceBundleManifestV1 } from "./resource-bundle.ts";
 import { promoteResourceBundleFiles } from "./resource-bundle-store.ts";
 import { checkExamModels, type ExamModelState } from "./exam-models.ts";
-import { createExamInference, validateExamScore, validateExamWav } from "./exam-inference.ts";
+import { createExamInference, validateExamWav } from "./exam-inference.ts";
+import { stopWorkerProcess } from "./worker-shutdown.ts";
 
 type SectionId = "phase1" | "phase2" | "part2";
 type VoiceRole = "question" | "answer";
@@ -163,6 +164,7 @@ let activeAudioCacheJob: string | null = null;
 let activeResourceBundleOperation: "export" | "import" | null = null;
 let examModelStatePromise: Promise<ExamModelState> | null = null;
 let examInference: ReturnType<typeof createExamInference> | null = null;
+let shuttingDown = false;
 
 
 function getExamModelState(): Promise<ExamModelState> {
@@ -484,6 +486,7 @@ function failWorker(error: Error): void {
 }
 
 function ensureWorker(): Promise<void> {
+  if (shuttingDown) return Promise.reject(new Error("语音服务正在关闭。"));
   if (worker && workerReady) return workerReady;
   workerLog = "";
   workerStdout = "";
@@ -528,7 +531,7 @@ function ensureWorker(): Promise<void> {
 }
 
 async function dispatchNextSpeech(): Promise<void> {
-  if (dispatchingSpeech || activeSpeechId) return;
+  if (shuttingDown || dispatchingSpeech || activeSpeechId) return;
   dispatchingSpeech = true;
   try {
     await ensureWorker();
@@ -541,8 +544,9 @@ async function dispatchNextSpeech(): Promise<void> {
     return;
   }
 
-  const job = speechQueues.foreground.shift() ?? speechQueues.background.shift();
   dispatchingSpeech = false;
+  if (shuttingDown) return;
+  const job = speechQueues.foreground.shift() ?? speechQueues.background.shift();
   if (!job || !worker?.stdin) return;
 
   const { request, resolve, reject } = job;
@@ -570,6 +574,10 @@ async function dispatchNextSpeech(): Promise<void> {
 
 function enqueueSpeech(request: TtsRequest, priority: SpeechPriority): Promise<string> {
   return new Promise((resolve, reject) => {
+    if (shuttingDown) {
+      reject(new Error("语音服务正在关闭。"));
+      return;
+    }
     speechQueues[priority].push({ request, resolve, reject });
     void dispatchNextSpeech();
   });
@@ -1191,7 +1199,7 @@ const server = createServer(async (req, res) => {
         reference: input.reference as string,
         transcript: input.transcript as string,
       });
-      json(res, 200, validateExamScore(result));
+      json(res, 200, result);
     } catch (error) {
       const status = isRecord(error) && typeof error.status === "number" ? error.status : 500;
       json(res, status, { error: error instanceof Error ? error.message : "本机语义评分失败，可保留转写后重试评分。" });
@@ -1617,7 +1625,13 @@ server.listen(port, "127.0.0.1", () => {
 });
 
 async function shutdown(): Promise<void> {
+  shuttingDown = true;
   server.close();
+  const illustrationChildren = [...illustrationJobs.values()].map((job) => job.child).filter((child): child is ChildProcess => Boolean(child));
+  await Promise.all([
+    stopWorkerProcess(worker, failWorker),
+    ...illustrationChildren.map((child) => stopWorkerProcess(child, () => {})),
+  ]);
   await examInference?.dispose();
   await rm(EXAM_TEMP_DIR, { recursive: true, force: true });
 }

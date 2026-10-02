@@ -20,12 +20,20 @@ export function isExamResponseCurrent(activeExamId, activeResponseId, responseEx
   return Boolean(activeExamId && activeResponseId && activeExamId === responseExamId && activeResponseId === responseId);
 }
 
+/** @param {boolean} isCurrent @param {boolean} waitForEnd */
+export function shouldContinueExamPlayback(isCurrent, waitForEnd) {
+  if (isCurrent) return true;
+  if (waitForEnd) throw new Error("朗读被另一句语音替换。");
+  return false;
+}
+
 const SECTION_NAMES = { phase1: "Part 1 · Phase 1", phase2: "Part 1 · Phase 2", part2: "Part 2" };
 const $ = (selector) => document.querySelector(selector);
 
-/** @param {{getSections:()=>Section[],getExamAvailability:()=>{available:boolean,reason:string},speakText:(turn:Turn)=>Promise<void>,stopSpeech?:()=>void}} options */
-export function installExamController({ getSections, getExamAvailability, speakText, stopSpeech = () => {} }) {
+/** @param {{getSections:()=>Section[],getExamAvailability:()=>{available:boolean,reason:string},speakText:(turn:Turn)=>Promise<void>,stopSpeech?:()=>void,startRecording?:typeof startExamRecording}} options */
+export function installExamController({ getSections, getExamAvailability, speakText, stopSpeech = () => {}, startRecording = startExamRecording }) {
   const startButton = /** @type {HTMLButtonElement} */ $("#exam-start");
+  const practicePanel = /** @type {HTMLElement} */ $("#practice-card");
   const availabilityNode = /** @type {HTMLElement} */ $("#exam-availability");
   const sessionPanel = /** @type {HTMLElement} */ $("#exam-panel");
   const summaryPanel = /** @type {HTMLElement} */ $("#exam-summary");
@@ -169,6 +177,7 @@ export function installExamController({ getSections, getExamAvailability, speakT
       }
     }
     sessionPanel.classList.remove("hidden");
+    practicePanel.classList.add("hidden");
     summaryPanel.classList.add("hidden");
     startButton.classList.add("hidden");
     setError("");
@@ -404,7 +413,7 @@ export function installExamController({ getSections, getExamAvailability, speakT
     recordButton.disabled = true;
     setStatus("正在请求麦克风权限…");
     try {
-      const session = await startExamRecording({
+      const session = await startRecording({
         maxDurationMs: 120_000,
         onAutoStop: () => { if (isCurrent(examId, responseId)) setStatus("已录满 120 秒，正在结束录音并识别…"); },
       });
@@ -441,10 +450,13 @@ export function installExamController({ getSections, getExamAvailability, speakT
 
   async function stopRecording() {
     if (!recordingSession) return;
+    const examId = activeExamId;
+    const responseId = currentResponseId;
     stopButton.disabled = true;
     setStatus("正在结束录音并准备本机识别…");
     try { await recordingSession.stop(); }
     catch (error) {
+      if (!isCurrent(examId, responseId)) return;
       setError(error instanceof Error ? error.message : "录音处理失败，请重试。");
       stopButton.classList.add("hidden");
       recordButton.classList.remove("hidden");
@@ -549,6 +561,7 @@ export function installExamController({ getSections, getExamAvailability, speakT
     activeExamId = "";
     currentResponseId = "";
     sessionPanel.classList.add("hidden");
+    practicePanel.classList.remove("hidden");
     summaryPanel.classList.remove("hidden");
     renderSummary(summary);
     startButton.classList.remove("hidden");
@@ -617,6 +630,7 @@ export function installExamController({ getSections, getExamAvailability, speakT
       responseRecords.clear();
       hintCounts = {};
       sessionPanel.classList.add("hidden");
+      practicePanel.classList.remove("hidden");
       summaryPanel.classList.add("hidden");
       summaryPanel.replaceChildren();
       startButton.classList.remove("hidden");
@@ -632,6 +646,7 @@ export function installExamController({ getSections, getExamAvailability, speakT
       responseRecords.clear();
       hintCounts = {};
       sessionPanel.classList.add("hidden");
+      practicePanel.classList.remove("hidden");
       summaryPanel.classList.add("hidden");
       renderAvailability();
     },

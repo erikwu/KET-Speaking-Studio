@@ -1,6 +1,6 @@
 // @ts-check
 import { getCacheActionState, resolvePlaybackMode } from "./cache-action-state.ts";
-import { installExamController } from "./exam-controller.ts";
+import { installExamController, shouldContinueExamPlayback } from "./exam-controller.ts";
 
 /** @typedef {{id:string,role:"Q"|"A"|"B",voiceRole:"question"|"answer",text:string,translation:string}} Turn */
 /** @typedef {{id:string,number:number,context:string,turns:Turn[]}} Group */
@@ -692,14 +692,15 @@ async function speak(button, { waitForEnd = false } = {}) {
   button.disabled = true;
   setError("");
   let playbackFinished = null;
+  const shouldContinue = () => shouldContinueExamPlayback(isCurrentPlayback(requestToken, requestedMaterialKey), waitForEnd);
   try {
     let audioUrl = "";
     if ((requestedMode === "offline-first" || requestedMode === "offline-only") && requestedMaterialKey) {
       const offlineResponse = await fetch(`/api/offline-audio/${requestedMaterialKey}/${button.dataset.turnId}`, { cache: "no-store" });
-      if (!isCurrentPlayback(requestToken, requestedMaterialKey)) return;
+      if (!shouldContinue()) return;
       if (offlineResponse.ok) {
         const audioBlob = await offlineResponse.blob();
-        if (!isCurrentPlayback(requestToken, requestedMaterialKey)) return;
+        if (!shouldContinue()) return;
         audioUrl = URL.createObjectURL(audioBlob);
         $("#playback-status").textContent = "正在播放本机离线语音";
       } else {
@@ -717,15 +718,15 @@ async function speak(button, { waitForEnd = false } = {}) {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ text, instruct, language }),
         });
-        if (!isCurrentPlayback(requestToken, requestedMaterialKey)) return;
+        if (!shouldContinue()) return;
         const result = await response.json();
-        if (!isCurrentPlayback(requestToken, requestedMaterialKey)) return;
+        if (!shouldContinue()) return;
         if (!response.ok) throw new Error(result.error ?? "语音合成失败。");
         audioUrl = `${result.audioUrl}?v=${Date.now()}`;
         audioCache.set(cacheKey, audioUrl);
       }
     }
-    if (!isCurrentPlayback(requestToken, requestedMaterialKey)) return;
+    if (!shouldContinue()) return;
     if (audioCurrent) audioCurrent.pause();
     if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
     currentObjectUrl = audioUrl.startsWith("blob:") ? audioUrl : "";
@@ -759,7 +760,7 @@ async function speak(button, { waitForEnd = false } = {}) {
     };
     await player.play();
     if (playbackFinished) await playbackFinished;
-    if (!isCurrentPlayback(requestToken, requestedMaterialKey)) return;
+    if (!shouldContinue()) return;
     if (!waitForEnd && (requestedMode === "realtime" || audioUrl.startsWith("/api/audio/"))) $("#playback-status").textContent = "正在朗读 · 本地实时合成";
   } catch (error) {
     if (waitForEnd) {

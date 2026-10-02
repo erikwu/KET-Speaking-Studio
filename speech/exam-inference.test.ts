@@ -75,6 +75,20 @@ test("transcribe_removesTempAudioOnSuccessAndWorkerFailure", async () => {
   });
 });
 
+test("transcribe_removesPartiallyWrittenAudioWhenFileWriteFails", async () => {
+  await withWorker(async ({ root, workerPath, tempDirectory }) => {
+    const inference = createExamInference(inferenceOptions(root, workerPath, tempDirectory, {
+      writeAudioFile: async (filePath, data, options) => {
+        await writeFile(filePath, data.subarray(0, 12), options);
+        throw new Error("simulated disk write failure");
+      },
+    }));
+    await assert.rejects(inference.transcribe(wavBuffer()), /simulated disk write failure/);
+    assert.deepEqual(await readdir(tempDirectory), []);
+    await inference.dispose();
+  });
+});
+
 test("workerTimeout_rejectsPendingRequestAndRestartsCleanly", async () => {
   await withWorker(async ({ root, workerPath, tempDirectory }) => {
     const inference = createExamInference(inferenceOptions(root, workerPath, tempDirectory, {

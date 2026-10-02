@@ -14,10 +14,26 @@ from speech import exam_worker
 
 class ExamWorkerTests(unittest.TestCase):
     def test_runtimeCheckReportsMissingPackagesAndFfmpeg(self):
-        with patch.object(exam_worker.importlib.util, "find_spec", side_effect=lambda name: None if name == "mlx_lm" else object()), patch.object(exam_worker.shutil, "which", return_value=None):
+        def import_module(name):
+            if name == "mlx_lm":
+                raise ImportError("not installed")
+            return object()
+
+        with patch.object(exam_worker.importlib, "import_module", side_effect=import_module), patch.object(exam_worker.shutil, "which", return_value=None):
             self.assertEqual(exam_worker.runtime_status("ffmpeg"), {
                 "asrPackageReady": True, "scoringPackageReady": False, "ffmpegReady": False,
             })
+
+    def test_runtimeCheckRejectsPackagesThatCannotBeImported(self):
+        def import_module(name):
+            if name == "mlx_lm":
+                raise ImportError("incompatible binary")
+            return object()
+
+        with patch.object(exam_worker.importlib.util, "find_spec", return_value=object()), patch.object(exam_worker.importlib, "import_module", side_effect=import_module), patch.object(exam_worker.shutil, "which", return_value="/usr/bin/ffmpeg"):
+            state = exam_worker.runtime_status("ffmpeg")
+        self.assertTrue(state["asrPackageReady"])
+        self.assertFalse(state["scoringPackageReady"])
 
     def test_transcribe_usesEnglishAndLocalModelPath(self):
         mock_module = types.SimpleNamespace(transcribe=Mock(return_value={"text": "  I like music.  "}))
@@ -57,6 +73,11 @@ class ExamWorkerTests(unittest.TestCase):
         self.assertIn("untrusted", system_prompt.lower())
         self.assertIn("ignore", system_prompt.lower())
         self.assertIn("meaning", system_prompt.lower())
+        self.assertIn("0 =", system_prompt)
+        self.assertIn("3 =", system_prompt)
+        self.assertIn("5 =", system_prompt)
+        self.assertIn("1–2", system_prompt)
+        self.assertIn("4 falls between 3 and 5", system_prompt)
 
     def test_modelErrorReturnsProtocolError(self):
         worker = exam_worker.ExamWorker("/asr", "/scoring")

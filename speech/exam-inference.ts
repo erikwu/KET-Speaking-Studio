@@ -13,7 +13,7 @@ const SCORE_DIMENSIONS = ["relevance", "completeness", "grammar", "vocabulary"] 
 /** @typedef {{question:string,reference:string,transcript:string}} ExamScoreInput */
 /** @typedef {{score:number,feedback:string}} ExamDimension */
 /** @typedef {{relevance:ExamDimension,completeness:ExamDimension,grammar:ExamDimension,vocabulary:ExamDimension,total:number}} ExamScore */
-/** @typedef {{pythonPath:string,workerPath:string,asrModelDir:string,scoringModelDir:string,tempDirectory:string,spawnImpl?:typeof spawn,requestTimeoutMs?:number,env?:NodeJS.ProcessEnv}} ExamInferenceOptions */
+/** @typedef {{pythonPath:string,workerPath:string,asrModelDir:string,scoringModelDir:string,tempDirectory:string,spawnImpl?:typeof spawn,requestTimeoutMs?:number,env?:NodeJS.ProcessEnv,writeAudioFile?:typeof writeFile}} ExamInferenceOptions */
 /** @typedef {{resolve:(value:any)=>void,reject:(error:Error)=>void,timer:ReturnType<typeof setTimeout>}} PendingRequest */
 
 /** Validates the exact audio format accepted by the local ASR model. @param {Buffer} wav */
@@ -81,6 +81,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 export function createExamInference(options: ExamInferenceOptions) {
   const spawnChild = options.spawnImpl ?? spawn;
+  const writeAudioFile = options.writeAudioFile ?? writeFile;
   const timeoutMs = options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const pending = new Map<string, PendingRequest>();
   let child: ChildProcess | null = null;
@@ -208,8 +209,8 @@ export function createExamInference(options: ExamInferenceOptions) {
       validateExamWav(wav);
       await mkdir(options.tempDirectory, { recursive: true });
       const audioPath = `${options.tempDirectory}/exam-${randomUUID()}.wav`;
-      await writeFile(audioPath, wav, { flag: "wx", mode: 0o600 });
       try {
+        await writeAudioFile(audioPath, wav, { flag: "wx", mode: 0o600 });
         const result = await request({ type: "transcribe", audioPath });
         if (!isRecord(result) || typeof result.transcript !== "string" || !result.transcript.trim()) throw new Error("本机没有识别到清晰的英文回答，请重新录音。");
         return { transcript: result.transcript.trim() };

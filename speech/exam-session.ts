@@ -135,7 +135,10 @@ function makeSectionSummary(sectionId, values, units, hintCounts) {
   const averages = { relevance: null, completeness: null, grammar: null, vocabulary: null, total: null };
   for (const field of SCORE_FIELDS) {
     if (values.scored.length) {
-      const total = values.scored.reduce((sum, result) => sum + (result.scores?.[field] ?? 0), 0);
+      const total = values.scored.reduce((sum, result) => {
+        const value = field === "total" ? result.scores?.total : result.scores?.[field]?.score;
+        return sum + (value ?? 0);
+      }, 0);
       averages[field] = roundOneDecimal(total / values.scored.length);
     }
   }

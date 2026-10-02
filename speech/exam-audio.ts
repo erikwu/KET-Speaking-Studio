@@ -89,6 +89,7 @@ export async function startExamRecording({ maxDurationMs = DEFAULT_MAX_RECORDING
   let timer = 0;
   let cancelled = false;
   let settled = false;
+  /** @type {Promise<void>|null} */ let cleanupPromise = null;
   /** @type {(value:Blob|null)=>void} */ let resolveCompletion;
   /** @type {(error:Error)=>void} */ let rejectCompletion;
   const completion = new Promise((resolve, reject) => {
@@ -96,10 +97,15 @@ export async function startExamRecording({ maxDurationMs = DEFAULT_MAX_RECORDING
     rejectCompletion = reject;
   });
 
-  const cleanup = async () => {
-    window.clearTimeout(timer);
-    stream.getTracks().forEach((track) => track.stop());
-    if (audioContext && audioContext.state !== "closed") await audioContext.close().catch(() => {});
+  const cleanup = () => {
+    if (!cleanupPromise) {
+      cleanupPromise = (async () => {
+        window.clearTimeout(timer);
+        stream.getTracks().forEach((track) => track.stop());
+        if (audioContext && audioContext.state !== "closed") await audioContext.close().catch(() => {});
+      })();
+    }
+    return cleanupPromise;
   };
   const finish = async () => {
     if (settled) return;
@@ -111,15 +117,25 @@ export async function startExamRecording({ maxDurationMs = DEFAULT_MAX_RECORDING
       }
       const recording = new Blob(chunks, { type: recorder.mimeType || "application/octet-stream" });
       if (!recording.size) throw new Error("没有录到音频，请重试。");
+      const recordingBuffer = await recording.arrayBuffer();
+      if (cancelled) {
+        resolveCompletion(null);
+        return;
+      }
       const AudioContextConstructor = window.AudioContext || /** @type {any} */ (window).webkitAudioContext;
       if (!AudioContextConstructor) throw new Error("此浏览器不支持音频转换。");
       audioContext = new AudioContextConstructor();
-      const decoded = await audioContext.decodeAudioData(await recording.arrayBuffer());
+      const decoded = await audioContext.decodeAudioData(recordingBuffer);
+      if (cancelled) {
+        resolveCompletion(null);
+        return;
+      }
       const channels = Array.from({ length: decoded.numberOfChannels }, (_, index) => decoded.getChannelData(index));
       const mono = downmixAndResample(channels, decoded.sampleRate, TARGET_SAMPLE_RATE);
       resolveCompletion(new Blob([encodeMonoPcmWav(mono, TARGET_SAMPLE_RATE)], { type: "audio/wav" }));
     } catch (error) {
-      rejectCompletion(error instanceof Error ? error : new Error("录音格式转换失败，请重试。"));
+      if (cancelled) resolveCompletion(null);
+      else rejectCompletion(error instanceof Error ? error : new Error("录音格式转换失败，请重试。"));
     } finally {
       await cleanup();
     }
@@ -139,12 +155,13 @@ export async function startExamRecording({ maxDurationMs = DEFAULT_MAX_RECORDING
     return completion;
   };
   const cancel = async () => {
-    if (settled) return;
+    const wasSettled = settled;
     cancelled = true;
     window.clearTimeout(timer);
-    if (recorder.state === "recording") recorder.stop();
-    else await finish();
-    await completion.catch(() => null);
+    if (!wasSettled && recorder.state === "recording") recorder.stop();
+    else if (!wasSettled) await finish();
+    await cleanup();
+    if (!wasSettled) await completion.catch(() => null);
   };
 
   try {

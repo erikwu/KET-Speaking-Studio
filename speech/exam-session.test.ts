@@ -64,7 +64,13 @@ test("summarizeExam_excludesUnscoredAndUnanswered", () => {
     { responseId: "r3", unitId: "p2-good", sectionId: "part2", status: "unanswered" },
   ], { "p1a": 2 });
   assert.equal(summary.bySection.phase1.scoredCount, 1);
-  assert.equal(summary.bySection.phase1.averages.total, 16);
+  assert.deepEqual(summary.bySection.phase1.averages, {
+    relevance: 4,
+    completeness: 3,
+    grammar: 5,
+    vocabulary: 4,
+    total: 16,
+  });
   assert.equal(summary.bySection.phase1.hintCount, 2);
   assert.equal(summary.bySection.phase2.scoredCount, 0);
   assert.equal(summary.bySection.phase2.averages.total, null);
