@@ -46,7 +46,9 @@ interface Job {
 const WEB_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(WEB_DIR, "..");
 const OUTPUT_DIR = path.join(ROOT_DIR, "outputs", "web-ui");
-const PYTHON_CLI = path.join(ROOT_DIR, ".venv", "bin", "mflux-generate-qwen-2.1");
+const PYTHON_CLI = process.env.MFLUX_CLI_PATH
+  ? path.resolve(ROOT_DIR, process.env.MFLUX_CLI_PATH)
+  : path.join(ROOT_DIR, ".venv", "bin", "mflux-generate-qwen-2.1");
 const baseModel = path.join(ROOT_DIR, "models", "Qwen-Image-2.1-MLX-4bit");
 const hereticModel = path.join(ROOT_DIR, "models", "Qwen-Image-2.1-MLX-4bit-Heretic");
 

@@ -38,7 +38,7 @@ async function reservePort(): Promise<number> {
   return port;
 }
 
-async function startSpeechServer(root: string) {
+async function startSpeechServer(root: string, overrides: { speechModelPath?: string; imageModelPath?: string; mfluxCliPath?: string } = {}) {
   const port = await reservePort();
   const outputDirectory = path.join(root, "outputs");
   const child = spawn(process.execPath, ["--experimental-strip-types", "speech/server.ts"], {
@@ -47,9 +47,10 @@ async function startSpeechServer(root: string) {
       ...process.env,
       TTS_PORT: String(port),
       TTS_OUTPUT_DIR: outputDirectory,
-      TTS_MODEL_PATH: path.join(root, "missing-speech-model"),
-      TTS_IMAGE_MODEL_PATH: path.join(root, "missing-image-model"),
-      MFLUX_CLI_PATH: path.join(root, "missing-mflux"),
+      TTS_MODEL_PATH: overrides.speechModelPath ?? path.join(root, "missing-speech-model"),
+      TTS_IMAGE_MODEL_PATH: overrides.imageModelPath ?? path.join(root, "missing-image-model"),
+      TTS_PYTHON: path.join(root, "missing-python"),
+      MFLUX_CLI_PATH: overrides.mfluxCliPath ?? path.join(root, "missing-mflux"),
     },
     stdio: ["ignore", "ignore", "pipe"],
   });
@@ -82,15 +83,44 @@ async function startSpeechServer(root: string) {
   };
 }
 
-async function withServer<T>(run: (context: { root: string; baseUrl: string; outputDirectory: string }) => Promise<T>): Promise<T> {
+async function withServer<T>(
+  run: (context: { root: string; baseUrl: string; outputDirectory: string }) => Promise<T>,
+  prepare?: (root: string) => Promise<{ speechModelPath?: string; imageModelPath?: string; mfluxCliPath?: string }>,
+): Promise<T> {
   const root = await mkdtemp(path.join(os.tmpdir(), "ket-resource-api-test-"));
-  const server = await startSpeechServer(root);
+  const overrides = prepare ? await prepare(root) : {};
+  const server = await startSpeechServer(root, overrides);
   try {
     return await run({ root, baseUrl: server.baseUrl, outputDirectory: server.outputDirectory });
   } finally {
     await server.stop();
     await rm(root, { recursive: true, force: true });
   }
+}
+
+async function createSpeechModelFixture(root: string): Promise<string> {
+  const modelPath = path.join(root, "valid-speech-model");
+  await mkdir(path.join(modelPath, "speech_tokenizer"), { recursive: true });
+  await writeFile(path.join(modelPath, "config.json"), "{}");
+  await writeFile(path.join(modelPath, "model.safetensors.index.json"), JSON.stringify({ weight_map: { test: "weights.safetensors" } }));
+  await writeFile(path.join(modelPath, "weights.safetensors"), "model-shard");
+  await writeFile(path.join(modelPath, "speech_tokenizer", "model.safetensors"), "tokenizer");
+  return modelPath;
+}
+
+async function createImageModelFixture(root: string): Promise<string> {
+  const modelPath = path.join(root, "valid-image-model");
+  for (const relativePath of [
+    "vae/model.safetensors.index.json",
+    "transformer/model.safetensors.index.json",
+    "text_encoder/model.safetensors.index.json",
+    "processor/tokenizer.json",
+  ]) {
+    const filePath = path.join(modelPath, relativePath);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, "{}");
+  }
+  return modelPath;
 }
 
 async function parseFixture(baseUrl: string, root: string) {
@@ -305,5 +335,94 @@ test("importResourceBundle_rejectsInvalidBundleWithoutReplacingActiveFiles", asy
       assert.deepEqual(await readFile(path.join(offlineDirectory, "manifest.json")), oldManifest);
       assert.deepEqual(await readFile(path.join(offlineDirectory, `clip-${parsed.sections[0].groups[0].turns[0].id}.wav`)), oldClip);
     }
+  });
+});
+
+test("config_reportsIndependentCapabilitiesWhenModelsAreMissing", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const config = await fetch(`${baseUrl}/api/config`).then((response) => response.json()) as any;
+    assert.equal(config.speechModelReady, false);
+    assert.equal(config.speechRuntimeReady, false);
+    assert.equal(config.imageModelReady, false);
+    assert.equal(config.imageRuntimeReady, false);
+    assert.equal(config.archiveToolsReady, true);
+    assert.equal(config.speechAvailable, false);
+    assert.equal(config.imageAvailable, false);
+  });
+
+  await withServer(async ({ baseUrl }) => {
+    const config = await fetch(`${baseUrl}/api/config`).then((response) => response.json()) as any;
+    assert.equal(config.speechModelReady, false);
+    assert.equal(config.imageModelReady, true);
+    assert.equal(config.imageRuntimeReady, false);
+    assert.equal(config.imageAvailable, false);
+  }, async (root) => ({ imageModelPath: await createImageModelFixture(root) }));
+
+  await withServer(async ({ baseUrl }) => {
+    const config = await fetch(`${baseUrl}/api/config`).then((response) => response.json()) as any;
+    assert.equal(config.speechModelReady, true);
+    assert.equal(config.speechRuntimeReady, false);
+    assert.equal(config.speechAvailable, false);
+    assert.equal(config.imageModelReady, false);
+  }, async (root) => ({ speechModelPath: await createSpeechModelFixture(root) }));
+});
+
+test("offlinePlaybackWorksWithoutModelsAndSynthesisDoesNot", async () => {
+  await withServer(async ({ root, baseUrl }) => {
+    const { parsed } = await parseFixture(baseUrl, root);
+    const archivePath = await createImportBundle(root, parsed);
+    const { response: importResponse, body } = await importBundle(baseUrl, archivePath);
+    assert.equal(importResponse.status, 200, body.error);
+    const turn = parsed.sections[0].groups[0].turns[0];
+    const offlineResponse = await fetch(`${baseUrl}/api/offline-audio/${body.materialKey}/${turn.id}`);
+    assert.equal(offlineResponse.status, 200);
+    assert.deepEqual(Buffer.from(await offlineResponse.arrayBuffer()), wav);
+
+    const synthesisResponse = await fetch(`${baseUrl}/api/synthesize`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: turn.text, instruct: "", language: "English" }),
+    });
+    assert.equal(synthesisResponse.status, 503);
+
+    const cacheItems = parsed.sections.flatMap((section: any) => section.groups.flatMap((group: any) => group.turns)).map((item: any) => ({
+      id: item.id,
+      text: item.text,
+      language: /[\u3400-\u9fff]/.test(item.text) ? "Chinese" : "English",
+      instruct: "",
+    }));
+    const cacheResponse = await fetch(`${baseUrl}/api/audio-cache/jobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ filePath: body.filePath, materialKey: body.materialKey, profile: "default", items: cacheItems }),
+    });
+    assert.equal(cacheResponse.status, 503);
+
+    const group = body.sections.find((section: any) => section.id === "part2").groups[0];
+    const dialogue = group.turns.map((item: any) => `${item.role}: ${item.text}`).join("\n");
+    const imageResponse = await fetch(`${baseUrl}/api/scenario-images`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ filePath: body.filePath, context: group.context, dialogue }),
+    });
+    assert.equal(imageResponse.status, 503);
+  });
+});
+
+test("audioCacheStatusReportsOnlyHashVerifiedPackagesAsComplete", async () => {
+  await withServer(async ({ root, baseUrl, outputDirectory }) => {
+    const { filePath, parsed } = await parseFixture(baseUrl, root);
+    await writeCompleteCache(baseUrl, outputDirectory, filePath, parsed);
+    const statusUrl = `${baseUrl}/api/audio-cache/status?materialKey=${encodeURIComponent(parsed.materialKey)}`;
+    const goodStatus = await fetch(statusUrl).then((response) => response.json()) as any;
+    assert.equal(goodStatus.packageExists, true);
+    assert.equal(goodStatus.matchesMaterial, true);
+
+    const firstTurnId = parsed.sections[0].groups[0].turns[0].id;
+    await writeFile(path.join(outputDirectory, "offline-audio", `clip-${firstTurnId}.wav`), Buffer.from("damaged wave"));
+    const damagedStatus = await fetch(statusUrl).then((response) => response.json()) as any;
+    assert.equal(damagedStatus.packageExists, false);
+    assert.equal(damagedStatus.matchesMaterial, false);
+    assert.equal(damagedStatus.cached, 0);
   });
 });

@@ -56,6 +56,7 @@ let sections = /** @type {Section[]} */ ([]);
 let activeSection = "phase1";
 let modelAvailable = false;
 let illustrationAvailable = false;
+let archiveToolsAvailable = false;
 let illustrationModelName = "Qwen Image";
 let audioCurrent = null;
 let currentObjectUrl = "";
@@ -148,21 +149,42 @@ function installSettings() {
 async function loadConfig() {
   const response = await fetch("/api/config");
   const config = await response.json();
-  modelAvailable = Boolean(config.modelReady && config.runtimeReady);
-  illustrationAvailable = Boolean(config.illustrationReady);
+  modelAvailable = Boolean(config.speechAvailable ?? (config.modelReady && config.runtimeReady));
+  illustrationAvailable = Boolean(config.imageAvailable ?? config.illustrationReady);
+  archiveToolsAvailable = Boolean(config.archiveToolsReady);
   illustrationModelName = config.illustrationModel || illustrationModelName;
   $("#model-name").textContent = config.modelPath;
   const status = $("#model-status");
-  if (!config.modelReady) {
-    status.textContent = "模型文件未完整下载";
+  status.classList.remove("status-warn", "status-ready");
+  if (!modelAvailable && !illustrationAvailable) {
+    status.textContent = "无本地模型 · 可导入离线资源";
     status.classList.add("status-warn");
-  } else if (!config.runtimeReady) {
-    status.textContent = "还需安装 MLX-Audio";
+  } else if (!modelAvailable) {
+    status.textContent = "语音模型未就绪 · 可用离线语音";
+    status.classList.add("status-warn");
+  } else if (!illustrationAvailable) {
+    status.textContent = "语音模型已就绪 · 图片生成不可用";
     status.classList.add("status-warn");
   } else {
-    status.textContent = "本地模型已就绪";
+    status.textContent = "语音与图片模型已就绪";
     status.classList.add("status-ready");
   }
+  const playbackSelect = /** @type {HTMLSelectElement} */ $("#playback-mode");
+  playbackSelect.disabled = !modelAvailable;
+  if (!modelAvailable) {
+    playbackMode = "offline-only";
+    playbackSelect.value = playbackMode;
+    $("#playback-mode-note").textContent = "当前没有本地语音模型：只播放已导入的离线语音，缺少的句子会提示不可用。音色和语气标签不会影响离线语音。";
+  } else {
+    if (playbackMode === "offline-only") playbackMode = "realtime";
+    playbackSelect.value = playbackMode;
+    $("#playback-mode-note").textContent = "缓存任务在后台逐句生成，可继续练习。离线语音使用生成时保存的音色；重新生成完成后才会替换旧缓存。";
+  }
+  const importButton = /** @type {HTMLButtonElement} */ $("#import-bundle");
+  importButton.disabled = !archiveToolsAvailable;
+  $("#bundle-status").textContent = archiveToolsAvailable
+    ? "导入包含材料、语音和已有配图的资源包；导出仅在离线语音完整时开放。"
+    : "本机缺少 zip/unzip 工具，暂时无法导入或导出资源包。";
 }
 
 function renderTabs() {
@@ -272,7 +294,11 @@ async function loadScenarioImages(panel, context, dialogue) {
     renderScenarioImages(gallery, result.imageUrls ?? []);
     button.dataset.cached = String(result.imageUrls?.length === 2);
     button.textContent = button.dataset.cached === "true" ? "重新生成两张配图" : "生成两张配图";
-    status.textContent = result.imageUrls?.length === 2 ? "两张配图已从本机缓存载入，可直接练习" : result.imageUrls?.length ? `已缓存 ${result.imageUrls.length} 张，点击补全` : "点击按钮生成两张情景配图";
+    status.textContent = result.imageUrls?.length === 2
+      ? "两张配图已从本机缓存载入，可直接练习"
+      : result.imageUrls?.length
+        ? illustrationAvailable ? `已缓存 ${result.imageUrls.length} 张，点击补全` : `已缓存 ${result.imageUrls.length} 张；图片模型未就绪，不能补全`
+        : illustrationAvailable ? "点击按钮生成两张情景配图" : "没有已缓存配图；本机图片模型未就绪，无法生成";
     if (result.job?.state === "running") {
       button.disabled = true;
       await followScenarioImageJob(panel, result.job);
@@ -297,7 +323,7 @@ async function followScenarioImageJob(panel, initialJob) {
   }
   renderScenarioImages(gallery, job.imageUrls ?? [], job.state === "completed");
   button.dataset.cached = String(job.imageUrls?.length === 2);
-  button.textContent = button.dataset.cached === "true" ? "重新生成两张配图" : "生成两张配图";
+  button.textContent = !illustrationAvailable ? "图像模型未就绪" : button.dataset.cached === "true" ? "重新生成两张配图" : "生成两张配图";
   if (job.state === "completed") status.textContent = job.message.includes("缓存") ? "两张配图已从本机缓存载入，可直接练习" : "两张配图已生成并缓存在本机";
   else status.textContent = job.error ?? "本机图像生成失败。";
   button.disabled = !illustrationAvailable;
@@ -379,6 +405,15 @@ function setCacheStatus(message) {
   $("#audio-cache-status").textContent = message;
 }
 
+function updateBundleControls(exportReady = false) {
+  const exportButton = /** @type {HTMLButtonElement} */ $("#export-bundle");
+  const available = archiveToolsAvailable && Boolean(materialKey && loadedFilePath);
+  exportButton.classList.toggle("hidden", !available || !exportReady);
+  exportButton.disabled = !available || !exportReady;
+  if (available && exportReady) $("#bundle-status").textContent = "当前材料的完整离线语音已通过校验，可下载资源包。";
+  else if (archiveToolsAvailable && materialKey) $("#bundle-status").textContent = "导出会在当前材料的全部离线语音生成并校验通过后开放。";
+}
+
 function renderAudioCacheStatus(data) {
   const runningJob = data.job?.state === "running" ? data.job : null;
   const hasMaterial = Boolean(materialKey && loadedFilePath);
@@ -387,6 +422,8 @@ function renderAudioCacheStatus(data) {
   const generateButton = /** @type {HTMLButtonElement} */ $("#generate-cache");
   const replaceButton = /** @type {HTMLButtonElement} */ $("#replace-cache");
   const isRunning = Boolean(runningJob);
+
+  updateBundleControls(Boolean(data.exportReady && packageMatches));
 
   $("#cache-count").textContent = packageMatches ? `${data.cached}/${data.total} 句` : "";
   generateButton.classList.toggle("hidden", packageMatches);
@@ -408,7 +445,9 @@ function renderAudioCacheStatus(data) {
     progressWrap.classList.add("hidden");
     if (packageMatches) setCacheStatus(`已有可用离线语音，覆盖 ${data.cached}/${data.total} 句。`);
     else if (packageExists) setCacheStatus("当前材料还没有匹配缓存；生成新包后会替换本机唯一的离线包。");
-    else setCacheStatus(hasMaterial ? "还没有离线语音缓存；可在后台生成固定默认音色版本。" : "读取材料后查看缓存状态");
+    else setCacheStatus(hasMaterial
+      ? modelAvailable ? "还没有离线语音缓存；可在后台生成固定默认音色版本。" : "没有可用的离线语音；请导入资源包，或在装有模型的 Mac 上生成后导出。"
+      : "读取材料后查看缓存状态");
   }
 }
 
@@ -416,7 +455,8 @@ async function refreshAudioCacheStatus() {
   if (!materialKey) return;
   const requestedKey = materialKey;
   try {
-    const response = await fetch(`/api/audio-cache/status?materialKey=${encodeURIComponent(requestedKey)}`);
+    const query = new URLSearchParams({ materialKey: requestedKey, filePath: loadedFilePath });
+    const response = await fetch(`/api/audio-cache/status?${query}`);
     const data = await response.json();
     if (!response.ok) throw new Error(data.error ?? "读取离线语音状态失败。");
     if (requestedKey !== materialKey) return;
@@ -470,6 +510,24 @@ async function startAudioCache(profile) {
   else void followAudioCacheJob(job);
 }
 
+function applyParsedMaterial(data) {
+  invalidatePlayback();
+  sections = data.sections;
+  loadedFilePath = data.filePath;
+  materialKey = data.materialKey;
+  $("#cache-count").textContent = "";
+  updateBundleControls(false);
+  activeSection = sections[0]?.id ?? "phase1";
+  pathInput.value = loadedFilePath;
+  const displayName = data.filePath.split(/[\\/]/).filter(Boolean).pop() ?? data.filePath;
+  $("#file-name").textContent = displayName;
+  $("#file-name").title = data.filePath;
+  $("#item-count").textContent = `${data.itemCount} 句英文台词`;
+  $("#empty-state").classList.add("hidden");
+  renderTabs();
+  renderGroups();
+}
+
 async function loadFile() {
   const requestedPath = pathInput.value.trim();
   if (!requestedPath) return setError("请填写 Markdown 文件路径。");
@@ -491,22 +549,11 @@ async function loadFile() {
     if (!response.ok) throw new Error(result.error ?? "读取失败。");
     /** @type {ParsedFile} */
     const data = result;
-    invalidatePlayback();
-    sections = data.sections;
-    loadedFilePath = data.filePath;
-    materialKey = data.materialKey;
-    activeSection = sections[0]?.id ?? "phase1";
-    const displayName = data.filePath.split(/[\\/]/).filter(Boolean).pop() ?? data.filePath;
-    $("#file-name").textContent = displayName;
-    $("#file-name").title = data.filePath;
-    $("#item-count").textContent = `${data.itemCount} 句英文台词`;
-    $("#empty-state").classList.add("hidden");
-    renderTabs();
-    renderGroups();
-    $("#playback-status").textContent = modelAvailable ? "点击任一句开始朗读" : "先完成模型安装后即可朗读";
+    applyParsedMaterial(data);
+    $("#playback-status").textContent = modelAvailable ? "点击任一句开始朗读" : "仅播放已缓存的离线语音";
     await refreshAudioCacheStatus();
     if (requestToken !== materialLoadToken) return;
-    if (!modelAvailable) setError("题目已读取；本机模型或 MLX-Audio 尚未就绪，语气设置已保存。完成环境准备后刷新即可朗读。");
+    if (!modelAvailable && !$("#cache-count").textContent) setError("题目已读取，但没有匹配的离线语音。请导入资源包，或使用已安装模型的 Mac 生成语音资源。");
   } catch (error) {
     if (requestToken === materialLoadToken) {
       setError(error instanceof Error ? error.message : "读取 Markdown 文件失败。");
@@ -517,6 +564,70 @@ async function loadFile() {
       loadButton.disabled = false;
       loadButton.innerHTML = '读取文件 <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M6 14 14 6M7 6h7v7" /></svg>';
     }
+  }
+}
+
+async function importResourceBundle(file) {
+  const button = /** @type {HTMLButtonElement} */ $("#import-bundle");
+  button.disabled = true;
+  button.textContent = "正在上传并校验…";
+  $("#bundle-status").textContent = `正在导入 ${file.name}；上传与完整性校验完成前不会替换当前资源。`;
+  setError("");
+  try {
+    const response = await fetch("/api/resource-bundles/import", {
+      method: "POST",
+      headers: { "content-type": "application/zip" },
+      body: file,
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error ?? "资源包导入失败。");
+    ++materialLoadToken;
+    cachePollToken += 1;
+    applyParsedMaterial(result);
+    $("#playback-status").textContent = "资源包已导入；正在校验语音并载入配图…";
+    await refreshAudioCacheStatus();
+    $("#playback-status").textContent = "资源包已就绪，点击任一句播放本地语音";
+    $("#bundle-status").textContent = `已导入 ${file.name}：${result.itemCount} 句语音材料和可用配图。`;
+    if (!modelAvailable) $("#playback-mode-note").textContent = "仅播放资源包内的离线语音；音色和语气标签不影响已生成的音频。";
+  } catch (error) {
+    setError(error instanceof Error ? error.message : "资源包导入失败。");
+    $("#bundle-status").textContent = "导入未完成；原有材料和离线资源保持不变。";
+  } finally {
+    button.disabled = !archiveToolsAvailable;
+    button.textContent = "导入资源包";
+    /** @type {HTMLInputElement} */ $("#bundle-file").value = "";
+  }
+}
+
+async function exportResourceBundle() {
+  const button = /** @type {HTMLButtonElement} */ $("#export-bundle");
+  if (!materialKey || !loadedFilePath || !archiveToolsAvailable) return;
+  button.disabled = true;
+  button.textContent = "正在准备下载…";
+  try {
+    const query = new URLSearchParams({ filePath: loadedFilePath, materialKey });
+    const response = await fetch(`/api/resource-bundles/export?${query}`);
+    if (!response.ok) {
+      const result = await response.json();
+      throw new Error(result.error ?? "无法导出资源包。");
+    }
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    const encodedName = /filename\*=UTF-8''([^;]+)/i.exec(response.headers.get("content-disposition") ?? "")?.[1];
+    const plainName = /filename="?([^";]+)"?/i.exec(response.headers.get("content-disposition") ?? "")?.[1];
+    link.download = encodedName ? decodeURIComponent(encodedName) : plainName ?? "practice.ketpack.zip";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    $("#bundle-status").textContent = "离线资源包已下载。";
+  } catch (error) {
+    setError(error instanceof Error ? error.message : "无法导出资源包。");
+  } finally {
+    button.disabled = false;
+    button.textContent = "下载离线资源包";
   }
 }
 
@@ -543,7 +654,7 @@ async function speak(button) {
   setError("");
   try {
     let audioUrl = "";
-    if (requestedMode === "offline-first" && requestedMaterialKey) {
+    if ((requestedMode === "offline-first" || requestedMode === "offline-only") && requestedMaterialKey) {
       const offlineResponse = await fetch(`/api/offline-audio/${requestedMaterialKey}/${button.dataset.turnId}`, { cache: "no-store" });
       if (!isCurrentPlayback(requestToken, requestedMaterialKey)) return;
       if (offlineResponse.ok) {
@@ -552,11 +663,12 @@ async function speak(button) {
         audioUrl = URL.createObjectURL(audioBlob);
         $("#playback-status").textContent = "正在播放本机离线语音";
       } else {
+        if (requestedMode === "offline-only") throw new Error("这句话没有可用的离线语音。请导入包含该语音的资源包，或在有模型的 Mac 上重新生成并导出。");
         $("#playback-status").textContent = "此句没有离线缓存，正在按当前标签实时合成…";
       }
     }
     if (!audioUrl) {
-      if (!modelAvailable) throw new Error("本地语音模型尚未就绪。请先完成 speech/README.md 中的模型与运行环境安装。");
+      if (!modelAvailable) throw new Error("本机语音模型尚未就绪，无法实时合成语音。");
       audioUrl = audioCache.get(cacheKey) ?? "";
       if (!audioUrl) {
         $("#playback-status").textContent = "本机正在合成…首次加载模型会稍久";
@@ -613,10 +725,16 @@ $("#generate-cache").addEventListener("click", () => {
 $("#replace-cache").addEventListener("click", () => {
   void startAudioCache("current").catch((error) => setCacheStatus(error instanceof Error ? error.message : "无法开始缓存生成。"));
 });
+$("#import-bundle").addEventListener("click", () => /** @type {HTMLInputElement} */ $("#bundle-file").click());
+$("#bundle-file").addEventListener("change", (event) => {
+  const file = /** @type {HTMLInputElement} */ (event.currentTarget).files?.[0];
+  if (file) void importResourceBundle(file);
+});
+$("#export-bundle").addEventListener("click", () => void exportResourceBundle());
 $("#playback-mode").addEventListener("change", (event) => {
   playbackMode = /** @type {HTMLSelectElement} */ (event.currentTarget).value === "offline-first" ? "offline-first" : "realtime";
   localStorage.setItem(PLAYBACK_MODE_KEY, playbackMode);
-  $("#playback-status").textContent = playbackMode === "offline-first" ? "离线优先；缺失语音时使用实时合成" : "实时合成模式";
+  $("#playback-status").textContent = playbackMode === "offline-first" ? "离线优先；缺失语音时使用实时合成" : playbackMode === "offline-only" ? "仅播放离线语音" : "实时合成模式";
 });
 
 installSettings();

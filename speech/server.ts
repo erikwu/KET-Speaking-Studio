@@ -1066,15 +1066,27 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const route = url.pathname;
   if (req.method === "GET" && route === "/api/config") {
+    const speechModelReady = await localModelReady();
+    const speechRuntimeReady = runtimeReady();
+    const imageModelReady = isImageModelDirectory(IMAGE_MODEL_DIR);
+    const imageRuntimeReady = existsSync(IMAGE_CLI);
+    const archiveToolsReady = existsSync("/usr/bin/zip") && existsSync("/usr/bin/unzip");
     json(res, 200, {
       modelName: path.basename(MODEL_DIR),
       modelPath: path.relative(ROOT, MODEL_DIR),
-      modelReady: await localModelReady(),
-      runtimeReady: runtimeReady(),
+      modelReady: speechModelReady,
+      runtimeReady: speechRuntimeReady,
+      speechModelReady,
+      speechRuntimeReady,
+      speechAvailable: speechModelReady && speechRuntimeReady,
       pythonPath: path.relative(ROOT, PYTHON),
       outputPath: path.relative(ROOT, AUDIO_DIR),
       illustrationModel: path.basename(IMAGE_MODEL_DIR),
-      illustrationReady: isImageModelDirectory(IMAGE_MODEL_DIR) && existsSync(IMAGE_CLI),
+      illustrationReady: imageModelReady && imageRuntimeReady,
+      imageModelReady,
+      imageRuntimeReady,
+      imageAvailable: imageModelReady && imageRuntimeReady,
+      archiveToolsReady,
     });
     return;
   }
@@ -1301,12 +1313,37 @@ const server = createServer(async (req, res) => {
       return;
     }
     const manifest = await readOfflineManifest(OFFLINE_CACHE_DIR);
-    const clipCount = manifest?.clips.filter((clip) => existsSync(offlineClipPath(OFFLINE_CACHE_DIR, clip.id))).length ?? 0;
+    let clipCount = 0;
+    if (manifest) {
+      for (const clip of manifest.clips) {
+        if (await offlineClipHash(OFFLINE_CACHE_DIR, clip.id) === clip.audioHash) clipCount += 1;
+      }
+    }
     const packageComplete = Boolean(manifest?.completedAt && clipCount === manifest.total && manifest.clips.length === manifest.total);
+    let materialTurnsMatch = true;
+    const requestedFilePath = url.searchParams.get("filePath") ?? "";
+    if (requestedFilePath) {
+      try {
+        const filePath = normalizeMarkdownPath(requestedFilePath);
+        const metadata = await stat(filePath);
+        if (!metadata.isFile() || metadata.size > FILE_LIMIT || path.extname(filePath).toLowerCase() !== ".md") throw new Error("invalid markdown");
+        const markdown = await readFile(filePath, "utf8");
+        const sections = parseMarkdown(markdown);
+        const ids = sections.flatMap((section) => section.groups.flatMap((group) => group.turns.map((turn) => turn.id)));
+        materialTurnsMatch =
+          materialIdentity(filePath, markdown) === materialKey &&
+          ids.length === manifest?.total &&
+          ids.length === manifest?.clips.length &&
+          ids.every((id, index) => id === manifest?.clips[index]?.id);
+      } catch {
+        materialTurnsMatch = false;
+      }
+    }
     const job = [...audioCacheJobs.values()].find((candidate) => candidate.state === "running");
     json(res, 200, {
       packageExists: packageComplete,
       matchesMaterial: packageComplete && manifest?.materialKey === materialKey,
+      exportReady: packageComplete && manifest?.materialKey === materialKey && materialTurnsMatch,
       activeMaterialKey: packageComplete ? manifest?.materialKey : undefined,
       profile: packageComplete ? manifest?.profile : undefined,
       total: packageComplete ? manifest?.total : 0,

@@ -23,6 +23,14 @@
 
         <section class="source-card">
           <div class="section-heading"><div><span class="step">01</span><h2>选择练习材料</h2></div><span id="model-status" class="status-chip" role="status" aria-live="polite">正在检查本地模型…</span></div>
+          <section class="bundle-panel" aria-label="离线资源包">
+            <div class="bundle-copy"><b>跨设备离线资源</b><span id="bundle-status" role="status" aria-live="polite">可导入包含材料、语音和已有配图的资源包</span></div>
+            <div class="bundle-actions">
+              <input id="bundle-file" class="visually-hidden" type="file" accept=".zip,application/zip" aria-hidden="true" tabindex="-1" />
+              <button id="import-bundle" class="cache-button secondary" type="button">导入资源包</button>
+              <button id="export-bundle" class="cache-button hidden" type="button" disabled>下载离线资源包</button>
+            </div>
+          </section>
           <div class="path-row">
             <input id="file-path" type="text" spellcheck="false" aria-label="Markdown 文件路径" />
             <button id="load-file" class="primary-button" type="button">读取文件 <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M6 14 14 6M7 6h7v7" /></svg></button>
@@ -45,9 +53,10 @@
               <select id="playback-mode">
                 <option value="realtime">实时合成</option>
                 <option value="offline-first">离线优先，缺失时实时合成</option>
+                <option value="offline-only">仅播放离线语音</option>
               </select>
             </label>
-            <p class="cache-note">缓存任务在后台逐句生成，可继续练习。离线语音使用生成时保存的音色；重新生成完成后才会替换旧缓存。</p>
+            <p id="playback-mode-note" class="cache-note">缓存任务在后台逐句生成，可继续练习。离线语音使用生成时保存的音色；重新生成完成后才会替换旧缓存。</p>
           </section>
           <div id="page-error" class="error-box hidden" role="alert"></div>
         </section>
