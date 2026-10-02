@@ -1,27 +1,38 @@
-# Qwen Image Studio
+# 视觉生成工作室
 
-本机运行的 Qwen-Image-2.1 Web 界面，使用项目中的 mflux 虚拟环境和 MLX checkpoint。界面和推理服务只监听 `127.0.0.1`，参考图和生成结果不会上传到远程服务。
+本机运行的图像与图生视频工作室。图像模式使用 Qwen Image 2.1 MLX 4-bit；图生视频模式使用 Wan 2.2 TI2V-5B MLX。网页和推理服务只监听 `127.0.0.1`，输入图片、提示词和生成结果保存在项目本地，不会上传到远程推理服务。
 
 ## 启动
 
-需要 Apple Silicon Mac、项目内已安装 mflux 的 `.venv`、以及 Node.js 22 或更新版本。于项目根目录运行：
+需要 Apple Silicon Mac 和 Node.js 22 或更新版本。在项目根目录运行：
 
 ```sh
 npm start
 ```
 
-在浏览器打开 <http://127.0.0.1:8787>。默认优先使用 `models/Qwen-Image-2.1-MLX-4bit-Heretic`；如果该目录不存在或不完整，则使用 `models/Qwen-Image-2.1-MLX-4bit`。可通过 `MFLUX_MODEL_PATH` 环境变量指定另一个兼容的本地模型目录。
+在浏览器打开 <http://127.0.0.1:8787>。图片模式需要项目 `.venv` 中的 mflux 和兼容的 Qwen 模型。视频模式需要 `models/Wan2.2-TI2V-5B-MLX-Q8`，以及隔离环境 `.venv-wan22-mlx/bin/python` 中的 `mlx-video`。两种模式分别检查就绪状态；其中一种未安装时，另一种仍可使用。
 
-生成图像和本次任务的输入文件保存在 `outputs/web-ui/`。页面提供图像预览和下载。
+## 图像模式 · Qwen Image 2.1
 
-如果模型目录缺失或不完整，或项目内找不到 mflux 命令，页面会显示对应的未就绪原因并禁用“生成图像”；服务端也会拒绝直接发起的生成请求。此图片能力与 8788 的离线资源播放相互独立：没有图片模型时，8788 仍可显示资源包中已有的 Part 2 配图。
-
-## 当前 checkpoint 支持的输入和参数
+默认优先使用 `models/Qwen-Image-2.1-MLX-4bit-Heretic`；如果该目录不存在或不完整，则使用 `models/Qwen-Image-2.1-MLX-4bit`。可通过 `MFLUX_MODEL_PATH` 环境变量指定其他兼容的本地模型目录。
 
 - 提示词、负面提示词、步数、Seed、宽高、Guidance。
-- 可选一张 PNG、JPEG 或 WebP 初始图；此 mflux checkpoint 用 img2img 的 `--image` / strength 路径，不是支持最多十张图的多模态编辑 checkpoint。
-- PNG、WebP、TIFF 输出。
-- 低内存模式和 VAE 分块解码。
+- 可选一张 PNG、JPEG 或 WebP 初始图；此 checkpoint 使用 img2img 的 `--image` / strength 路径，不支持最多十张图的多模态编辑。
+- PNG、WebP、TIFF 输出；支持低内存模式和 VAE 分块解码。
 - 宽高必须是 16 的倍数。步数为 1–100；Guidance 大于 1 时 mflux 需要非空负面提示词。
 
 模型 README 建议 40 步、Guidance 1，并推荐 `--low-ram`。Web 界面默认使用这些设置。
+
+## 图生视频模式 · Wan 2.2 TI2V-5B
+
+上传一张 PNG、JPEG 或 WebP 起始图（最大 24 MB），填写动作提示词，然后在“视频参数”中设置生成内容：
+
+- 默认尺寸为 1280×704，宽和高必须为 32 的倍数。
+- 视频长度下拉菜单提供 41、81 和 121 帧，默认 41 帧；输出帧率固定为 24 fps，约为 1.7、3.4 或 5 秒。
+- 默认 20 步、Guidance scale 5.0；步数范围 1–100，Guidance scale 范围 0–20。
+- Seed 可留空随机生成，也可设置为 0–4,294,967,295 之间的整数。负面提示词可选；留空时使用模型配置的默认值。
+- 完成后可在页面的原生播放器中预览、定位播放和下载 MP4。
+
+图像与视频任务共用同一任务状态、进度、停止操作和单任务锁，避免两个模型同时占用统一内存。输入起始图、提示词及生成文件保存在 `outputs/web-ui/<任务编号>/`，其中包括 `prompt.txt`、参考图和结果文件。Wan 模型或隔离运行环境缺失时，视频状态会说明原因并禁用视频提交，不影响图像模式。
+
+如果图像模型或 mflux 缺失，图像模式同样会单独显示未就绪原因；服务仍可启动，另一模式的就绪状态不受影响。

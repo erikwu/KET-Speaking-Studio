@@ -1,5 +1,5 @@
 {
-  "name": "qwen-image-local-studio",
+  "name": "visual-generation-studio",
   "private": true,
   "type": "module",
   "scripts": {

@@ -672,7 +672,8 @@ const server = createServer(async (req, res) => {
 const port = Number(process.env.PORT ?? 8787);
 if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("PORT 需为 1 到 65535 的整数。");
 server.listen(port, "127.0.0.1", () => {
-  console.log(`Qwen Image Studio is ready at http://127.0.0.1:${port}`);
-  console.log(`Model: ${path.relative(ROOT_DIR, configuredModel)}`);
-  console.log(`Saved images: ${path.relative(ROOT_DIR, OUTPUT_DIR)}`);
+  console.log(`视觉生成工作室 is ready at http://127.0.0.1:${port}`);
+  console.log(`Image model: ${path.relative(ROOT_DIR, configuredModel)}`);
+  console.log(`Video model: ${path.relative(ROOT_DIR, wanModel)}`);
+  console.log(`Saved outputs: ${path.relative(ROOT_DIR, OUTPUT_DIR)}`);
 });
