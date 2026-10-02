@@ -1,12 +1,14 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomInt, randomUUID } from "node:crypto";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
+import { once } from "node:events";
 import { fileURLToPath } from "node:url";
-import { writeResourceBundleArchive, type ResourceBundleManifestV1 } from "./resource-bundle.ts";
+import { readResourceBundleArchive, writeResourceBundleArchive, type ResourceBundleManifestV1 } from "./resource-bundle.ts";
+import { promoteResourceBundleFiles } from "./resource-bundle-store.ts";
 
 type SectionId = "phase1" | "phase2" | "part2";
 type VoiceRole = "question" | "answer";
@@ -117,6 +119,7 @@ const ILLUSTRATION_PROMPT_VERSION = "dialogue-cue-v2";
 const JSON_LIMIT = 64 * 1024;
 const AUDIO_CACHE_REQUEST_LIMIT = 8 * 1024 * 1024;
 const FILE_LIMIT = 10 * 1024 * 1024;
+const RESOURCE_BUNDLE_UPLOAD_LIMIT = 2 * 1024 * 1024 * 1024;
 const SECTION_TITLES: Record<SectionId, string> = {
   phase1: "Part 1 · Phase 1",
   phase2: "Part 1 · Phase 2",
@@ -148,6 +151,47 @@ let activeIllustrationJob: string | null = null;
 let activeSpeechId: string | null = null;
 let dispatchingSpeech = false;
 let activeAudioCacheJob: string | null = null;
+let activeResourceBundleOperation: "export" | "import" | null = null;
+
+function acquireResourceBundleOperation(operation: "export" | "import"): () => void {
+  if (activeResourceBundleOperation || activeAudioCacheJob) {
+    throw Object.assign(new Error("离线语音缓存正在生成或资源包操作正在进行，请稍后重试。"), { status: 409 });
+  }
+  activeResourceBundleOperation = operation;
+  return () => {
+    if (activeResourceBundleOperation === operation) activeResourceBundleOperation = null;
+  };
+}
+
+async function receiveResourceBundleUpload(req: IncomingMessage, destinationPath: string): Promise<number> {
+  await mkdir(path.dirname(destinationPath), { recursive: true });
+  const output = createWriteStream(destinationPath, { flags: "wx" });
+  const outputFinished = new Promise<void>((resolve, reject) => {
+    output.once("finish", resolve);
+    output.once("error", reject);
+  });
+  let total = 0;
+  let oversized = false;
+  try {
+    for await (const value of req) {
+      const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+      total += chunk.length;
+      if (total > RESOURCE_BUNDLE_UPLOAD_LIMIT) {
+        oversized = true;
+        continue;
+      }
+      if (!output.write(chunk)) await Promise.race([once(output, "drain"), outputFinished]);
+    }
+    output.end();
+    await outputFinished;
+    if (oversized) throw Object.assign(new Error("上传的资源包超过 2 GiB。"), { status: 413 });
+    return total;
+  } catch (error) {
+    output.destroy();
+    await rm(destinationPath, { force: true });
+    throw error;
+  }
+}
 
 function json(res: ServerResponse, status: number, value: unknown): void {
   res.writeHead(status, {
@@ -710,6 +754,7 @@ async function startAudioCacheJob(input: unknown): Promise<AudioCacheJob> {
 
   if (!(await localModelReady())) throw Object.assign(new Error(`模型文件尚未下载完整：${path.relative(ROOT, MODEL_DIR)}`), { status: 503 });
   if (!runtimeReady()) throw Object.assign(new Error("MLX-Audio 运行环境未安装。请按 speech/README.md 完成一次环境准备。"), { status: 503 });
+  if (activeResourceBundleOperation) throw Object.assign(new Error("离线资源包正在导入或导出，请稍后再生成语音缓存。"), { status: 409 });
   if (activeAudioCacheJob) throw Object.assign(new Error("已有离线语音缓存任务正在生成，请稍后再试。"), { status: 409 });
 
   activeAudioCacheJob = "starting";
@@ -1033,6 +1078,92 @@ const server = createServer(async (req, res) => {
     });
     return;
   }
+  if (req.method === "POST" && route === "/api/resource-bundles/import") {
+    const contentType = String(req.headers["content-type"] ?? "").split(";", 1)[0]!.trim().toLowerCase();
+    if (contentType !== "application/zip") {
+      json(res, 415, { error: "资源包导入需要使用 application/zip。" });
+      return;
+    }
+    const contentLength = Number(req.headers["content-length"] ?? 0);
+    if (Number.isFinite(contentLength) && contentLength > RESOURCE_BUNDLE_UPLOAD_LIMIT) {
+      json(res, 413, { error: "上传的资源包超过 2 GiB。" });
+      return;
+    }
+
+    let releaseOperation: (() => void) | null = null;
+    let temporaryDirectory = "";
+    try {
+      releaseOperation = acquireResourceBundleOperation("import");
+      await mkdir(AUDIO_DIR, { recursive: true });
+      temporaryDirectory = await mkdtemp(path.join(AUDIO_DIR, ".resource-import-"));
+      const archivePath = path.join(temporaryDirectory, "upload.zip");
+      await receiveResourceBundleUpload(req, archivePath);
+      const decodedDirectory = path.join(temporaryDirectory, "decoded");
+      const bundle = await readResourceBundleArchive({ archivePath, destinationDirectory: decodedDirectory });
+      const markdownBytes = await readFile(bundle.materialPath);
+      const markdown = markdownBytes.toString("utf8");
+      const sections = parseMarkdown(markdown);
+      const turns = sections.flatMap((section) => section.groups.flatMap((group) => group.turns));
+      if (!turns.length) throw new Error("资源包中的 Markdown 没有可练习的 Part 1 / Part 2 问答。" );
+      const declaredTurnIds = bundle.manifest.speech.clips.map((clip) => clip.id);
+      if (turns.length !== bundle.manifest.speech.total || turns.length !== declaredTurnIds.length || turns.some((turn, index) => turn.id !== declaredTurnIds[index])) {
+        throw new Error("资源包中的 Markdown 问答顺序或数量与离线语音不匹配。" );
+      }
+
+      const importedMaterialPath = path.join(AUDIO_DIR, "imported-material.md");
+      const materialKey = materialIdentity(importedMaterialPath, markdown);
+      const stagedMaterialPath = path.join(temporaryDirectory, "imported-material.md");
+      await writeFile(stagedMaterialPath, markdownBytes, { flag: "wx" });
+
+      const stagedOfflineDirectory = path.join(temporaryDirectory, "offline-audio");
+      await mkdir(stagedOfflineDirectory, { recursive: true });
+      const localManifest: OfflineManifest = {
+        version: 1,
+        materialKey,
+        profile: bundle.manifest.speech.profile,
+        profileKey: bundle.manifest.speech.profileKey,
+        total: bundle.manifest.speech.total,
+        clips: bundle.manifest.speech.clips.map((clip) => ({ id: clip.id, cacheKey: clip.cacheKey, audioHash: clip.sha256 })),
+        completedAt: new Date().toISOString(),
+      };
+      for (const clip of bundle.manifest.speech.clips) {
+        const sourcePath = bundle.audioPaths.get(clip.id);
+        if (!sourcePath) throw new Error(`资源包缺少离线语音 ${clip.id}。`);
+        await copyFile(sourcePath, offlineClipPath(stagedOfflineDirectory, clip.id));
+      }
+      await writeOfflineManifest(stagedOfflineDirectory, localManifest);
+
+      const part2Groups = new Map(sections.filter((section) => section.id === "part2").flatMap((section) => section.groups.map((group) => [group.id, group] as const)));
+      const moves: Array<{ stagedPath: string; destinationPath: string }> = [
+        { stagedPath: stagedOfflineDirectory, destinationPath: OFFLINE_CACHE_DIR },
+        { stagedPath: stagedMaterialPath, destinationPath: importedMaterialPath },
+      ];
+      for (const image of bundle.manifest.images) {
+        const group = part2Groups.get(image.groupId);
+        if (!group) throw new Error(`资源包配图关联了不存在的 Part 2 情景：${image.groupId}。`);
+        const sourcePath = bundle.imagePaths.get(`${image.groupId}:${image.variant}`);
+        if (!sourcePath) throw new Error(`资源包缺少情景配图 ${image.groupId}（${image.variant}）。`);
+        const context = group.context || `口语练习情景 ${group.number}`;
+        const dialogue = group.turns.map((turn) => `${turn.role}: ${turn.text}`).join("\n");
+        const scenarioKey = illustrationKey(importedMaterialPath, context, dialogue);
+        moves.push({
+          stagedPath: sourcePath,
+          destinationPath: path.join(ILLUSTRATION_DIR, scenarioKey, `picture-${image.variant}.png`),
+        });
+      }
+
+      await promoteResourceBundleFiles({ moves, backupDirectory: path.join(temporaryDirectory, "backups") });
+      const itemCount = turns.length;
+      json(res, 200, { filePath: importedMaterialPath, materialKey, sections, itemCount });
+    } catch (error) {
+      const status = isRecord(error) && typeof error.status === "number" ? error.status : 400;
+      json(res, status, { error: error instanceof Error ? error.message : "无法导入离线资源包。" });
+    } finally {
+      releaseOperation?.();
+      if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true });
+    }
+    return;
+  }
   if (req.method === "GET" && route === "/api/resource-bundles/export") {
     const requestedPath = url.searchParams.get("filePath") ?? "";
     const requestedMaterialKey = url.searchParams.get("materialKey") ?? "";
@@ -1042,7 +1173,9 @@ const server = createServer(async (req, res) => {
     }
 
     let temporaryDirectory = "";
+    let releaseOperation: (() => void) | null = null;
     try {
+      releaseOperation = acquireResourceBundleOperation("export");
       const filePath = normalizeMarkdownPath(requestedPath);
       if (path.extname(filePath).toLowerCase() !== ".md") {
         json(res, 400, { error: "资源包只能导出 Markdown 练习材料。" });
@@ -1156,6 +1289,7 @@ const server = createServer(async (req, res) => {
       if (res.headersSent) res.destroy(error instanceof Error ? error : undefined);
       else json(res, 500, { error: error instanceof Error ? error.message : "创建离线资源包失败。" });
     } finally {
+      releaseOperation?.();
       if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true });
     }
     return;

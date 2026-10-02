@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { once } from "node:events";
 import os from "node:os";
@@ -132,6 +132,68 @@ async function writeCompleteCache(baseUrl: string, outputDirectory: string, file
   await writeFile(path.join(imageDirectory, "picture-1.png"), png);
 }
 
+async function createImportBundle(root: string, parsed: any, options: { version?: number; badHash?: boolean; reverseTurns?: boolean; includeImage?: boolean } = {}) {
+  const staging = path.join(root, `bundle-source-${Math.random().toString(16).slice(2)}`);
+  const archivePath = path.join(root, `import-${Math.random().toString(16).slice(2)}.ketpack.zip`);
+  const turns = parsed.sections.flatMap((section: any) => section.groups.flatMap((group: any) => group.turns));
+  const clips = turns.map((turn: any) => ({
+    id: turn.id,
+    entry: `audio/${turn.id}.wav`,
+    cacheKey: "b".repeat(64),
+    byteLength: wav.length,
+    sha256: options.badHash && turn.id === turns[0].id ? "d".repeat(64) : sha256(wav),
+  }));
+  if (options.reverseTurns) clips.reverse();
+  const group = parsed.sections.find((section: any) => section.id === "part2").groups[0];
+  const images = options.includeImage === false ? [] : [{
+    groupId: group.id,
+    variant: 1,
+    entry: `scenario-images/${group.id}-1.png`,
+    byteLength: png.length,
+    sha256: sha256(png),
+  }];
+  const manifest = {
+    format: "ket-speaking-resource-bundle",
+    version: options.version ?? 1,
+    material: { entry: "material.md", filename: "KET questions.md", byteLength: Buffer.byteLength(markdown), sha256: sha256(markdown) },
+    speech: { profile: "default", profileKey: "a".repeat(64), total: turns.length, clips },
+    images,
+  };
+  const entries: Record<string, Buffer> = { "material.md": Buffer.from(markdown) };
+  for (const turn of turns) entries[`audio/${turn.id}.wav`] = wav;
+  if (images.length) entries[images[0]!.entry] = png;
+  for (const [entry, content] of Object.entries({ "manifest.json": Buffer.from(JSON.stringify(manifest)), ...entries })) {
+    const filePath = path.join(staging, entry);
+    await mkdir(path.dirname(filePath), { recursive: true });
+    await writeFile(filePath, content);
+  }
+  const names = ["manifest.json", ...Object.keys(entries)].sort();
+  const zip = spawn("/usr/bin/zip", ["-q", "-D", archivePath, "-@"], { cwd: staging, stdio: ["pipe", "ignore", "pipe"] });
+  let zipError = "";
+  zip.stderr.setEncoding("utf8");
+  zip.stderr.on("data", (chunk: string) => { zipError = (zipError + chunk).slice(-1000); });
+  zip.stdin.end(`${names.join("\n")}\n`);
+  const [zipCode] = await once(zip, "close") as [number | null, NodeJS.Signals | null];
+  assert.equal(zipCode, 0, zipError);
+  return archivePath;
+}
+
+async function importBundle(baseUrl: string, archivePath: string) {
+  const response = await fetch(`${baseUrl}/api/resource-bundles/import`, {
+    method: "POST",
+    headers: { "content-type": "application/zip" },
+    body: new Uint8Array(await readFile(archivePath)),
+  });
+  const body = await response.json() as any;
+  return { response, body };
+}
+
+function importedScenarioQuery(filePath: string, group: any) {
+  const context = group.context || `口语练习情景 ${group.number}`;
+  const dialogue = group.turns.map((turn: any) => `${turn.role}: ${turn.text}`).join("\n");
+  return new URLSearchParams({ filePath, context, dialogue });
+}
+
 test("exportResourceBundle_includesMaterialCompleteAudioAndOnlyExistingImages", async () => {
   await withServer(async ({ root, baseUrl, outputDirectory }) => {
     const { filePath, parsed } = await parseFixture(baseUrl, root);
@@ -178,5 +240,70 @@ test("exportResourceBundle_rejectsMissingIncompleteOrMismatchedAudioPackage", as
     await writeCompleteCache(baseUrl, outputDirectory, filePath, parsed, { materialKey: "c".repeat(64) });
     const mismatchedResponse = await fetch(`${baseUrl}/api/resource-bundles/export?${query}`);
     assert.equal(mismatchedResponse.status, 409);
+  });
+});
+
+test("importResourceBundle_remapsAudioAndImagesToNewMaterialPath", async () => {
+  await withServer(async ({ root, baseUrl, outputDirectory }) => {
+    const { parsed } = await parseFixture(baseUrl, root);
+    const archivePath = await createImportBundle(root, parsed);
+    const { response, body } = await importBundle(baseUrl, archivePath);
+    assert.equal(response.status, 200, body.error);
+    assert.equal(body.filePath, path.join(outputDirectory, "imported-material.md"));
+    assert.notEqual(body.materialKey, parsed.materialKey);
+    assert.equal(body.itemCount, 6);
+    assert.equal(body.sections[0].id, "phase1");
+
+    const turnId = parsed.sections[0].groups[0].turns[0].id;
+    const audioResponse = await fetch(`${baseUrl}/api/offline-audio/${body.materialKey}/${turnId}`);
+    assert.equal(audioResponse.status, 200);
+    assert.deepEqual(Buffer.from(await audioResponse.arrayBuffer()), wav);
+
+    const importedGroup = body.sections.find((section: any) => section.id === "part2").groups[0];
+    const imageState = await fetch(`${baseUrl}/api/scenario-images?${importedScenarioQuery(body.filePath, importedGroup)}`).then((result) => result.json()) as any;
+    assert.equal(imageState.imageUrls.length, 1);
+    const imageResponse = await fetch(`${baseUrl}${imageState.imageUrls[0]}`);
+    assert.equal(imageResponse.status, 200);
+    assert.deepEqual(Buffer.from(await imageResponse.arrayBuffer()), png);
+  });
+});
+
+test("importResourceBundle_allowsPartialImages", async () => {
+  await withServer(async ({ root, baseUrl, outputDirectory }) => {
+    const { parsed } = await parseFixture(baseUrl, root);
+    const existingOtherImage = path.join(outputDirectory, "scenario-images", "e".repeat(32), "picture-1.png");
+    await mkdir(path.dirname(existingOtherImage), { recursive: true });
+    await writeFile(existingOtherImage, Buffer.from("keep this other scenario image"));
+    const archivePath = await createImportBundle(root, parsed);
+    const { response, body } = await importBundle(baseUrl, archivePath);
+    assert.equal(response.status, 200, body.error);
+    const group = body.sections.find((section: any) => section.id === "part2").groups[0];
+    const imageState = await fetch(`${baseUrl}/api/scenario-images?${importedScenarioQuery(body.filePath, group)}`).then((result) => result.json()) as any;
+    assert.equal(imageState.imageUrls.length, 1);
+    assert.deepEqual(await readFile(existingOtherImage), Buffer.from("keep this other scenario image"));
+    const absentVariant = await fetch(`${baseUrl}${imageState.imageUrls[0].replace(/\/1$/, "/2")}`);
+    assert.equal(absentVariant.status, 404);
+  });
+});
+
+test("importResourceBundle_rejectsInvalidBundleWithoutReplacingActiveFiles", async () => {
+  await withServer(async ({ root, baseUrl, outputDirectory }) => {
+    const { filePath, parsed } = await parseFixture(baseUrl, root);
+    await writeCompleteCache(baseUrl, outputDirectory, filePath, parsed);
+    const importedMarkdown = path.join(outputDirectory, "imported-material.md");
+    const oldMarkdown = Buffer.from("the previous imported material\n");
+    await writeFile(importedMarkdown, oldMarkdown);
+    const offlineDirectory = path.join(outputDirectory, "offline-audio");
+    const oldManifest = await readFile(path.join(offlineDirectory, "manifest.json"));
+    const oldClip = await readFile(path.join(offlineDirectory, `clip-${parsed.sections[0].groups[0].turns[0].id}.wav`));
+    const invalidOptions = [{ version: 2 }, { badHash: true }, { reverseTurns: true }];
+    for (const options of invalidOptions) {
+      const archivePath = await createImportBundle(root, parsed, options);
+      const { response, body } = await importBundle(baseUrl, archivePath);
+      assert.equal(response.status, 400, body.error ?? "invalid resource bundle must be rejected with a validation error");
+      assert.deepEqual(await readFile(importedMarkdown), oldMarkdown);
+      assert.deepEqual(await readFile(path.join(offlineDirectory, "manifest.json")), oldManifest);
+      assert.deepEqual(await readFile(path.join(offlineDirectory, `clip-${parsed.sections[0].groups[0].turns[0].id}.wav`)), oldClip);
+    }
   });
 });
