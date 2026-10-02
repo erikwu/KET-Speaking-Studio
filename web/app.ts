@@ -2,7 +2,7 @@
 // @ts-check
 
 /** @typedef {{modelName:string,modelPath:string,modelReady:boolean,cliReady:boolean,maxReferenceImages:number,referenceMode:string,video:{modelName:string,modelPath:string,modelReady:boolean,cliReady:boolean,defaults:{width:number,height:number,frameOptions:number[],numFrames:number,steps:number,guideScale:number,fps:number}}}} AppConfig */
-/** @typedef {{id:string,mediaType?:"image"|"video",state:string,progress:number,message:string,seed:number,error?:string,logTail?:string,imageUrl?:string,downloadUrl?:string,videoUrl?:string,videoDownloadUrl?:string}} JobStatus */
+/** @typedef {{id:string,mediaType:"image"|"video",state:string,progress:number,message:string,seed:number,error?:string,logTail?:string,imageUrl?:string,downloadUrl?:string,videoUrl?:string,videoDownloadUrl?:string}} JobStatus */
 
 /** @type {HTMLFormElement} */
 const form = document.querySelector("#generate-form");
@@ -65,6 +65,12 @@ function setVideoError(message) {
 function showOnly(id) {
   for (const name of ["empty-state", "loading-state", "result-image", "result-video", "failed-state"]) {
     $(`#${name}`).classList.toggle("hidden", name !== id);
+  }
+  if (id !== "result-image") resultImage.removeAttribute("src");
+  if (id !== "result-video") {
+    resultVideo.pause();
+    resultVideo.removeAttribute("src");
+    resultVideo.load();
   }
 }
 
@@ -305,14 +311,21 @@ function delay(ms) {
 async function followJob(jobId) {
   while (currentJobId === jobId) {
     let response;
+    /** @type {JobStatus} */
+    let job;
     try {
       response = await fetch(`/api/jobs/${jobId}`);
+      job = await response.json();
     } catch {
-      showFailure("与本地生成服务的连接中断。", "");
+      $("#loading-title").textContent = "与本机服务的连接暂时中断";
+      $("#loading-message").textContent = "任务可能仍在本机运行。重新连接查看状态，或尝试停止任务。";
+      $("#progress-label").textContent = "等待重新连接";
+      $("#progress-percent").textContent = "—";
+      $("#retry-poll-button").classList.remove("hidden");
+      setState("连接中断", "error");
       return;
     }
-    /** @type {JobStatus} */
-    const job = await response.json();
+    $("#retry-poll-button").classList.add("hidden");
     if (!response.ok) {
       showFailure(job.error ?? "读取任务状态失败。", job.logTail ?? "");
       return;
@@ -396,6 +409,7 @@ form.addEventListener("submit", async (event) => {
   }
   setBusy(true);
   showOnly("loading-state");
+  $("#retry-poll-button").classList.add("hidden");
   $("#loading-title").textContent = "正在准备生成";
   $("#loading-message").textContent = "本机模型正在运行，请稍候。";
   $("#progress-bar").style.width = "3%";
@@ -434,6 +448,7 @@ videoForm.addEventListener("submit", async (event) => {
   }
   setBusy(true);
   showOnly("loading-state");
+  $("#retry-poll-button").classList.add("hidden");
   $("#loading-title").textContent = "正在准备视频生成";
   $("#loading-message").textContent = "Wan 模型正在本机运行，请稍候。";
   $("#progress-bar").style.width = "3%";
@@ -511,7 +526,16 @@ cancelButton.addEventListener("click", async () => {
     await fetch(`/api/jobs/${currentJobId}/cancel`, { method: "POST" });
   } catch {
     $("#loading-message").textContent = "停止请求失败，任务可能仍在运行。";
+    cancelButton.disabled = false;
   }
+});
+$("#retry-poll-button").addEventListener("click", async () => {
+  if (!currentJobId) return;
+  $("#retry-poll-button").classList.add("hidden");
+  $("#loading-title").textContent = "正在重新连接";
+  $("#loading-message").textContent = "正在读取本机任务状态…";
+  setState("正在重新连接", "running");
+  await followJob(currentJobId);
 });
 $("#retry-button").addEventListener("click", () => {
   showOnly("empty-state");

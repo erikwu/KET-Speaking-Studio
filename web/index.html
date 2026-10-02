@@ -168,11 +168,12 @@
               <p id="loading-message">本机模型正在运行，请稍候。</p>
               <div class="progress-track"><i id="progress-bar"></i></div>
               <div class="progress-meta"><span id="progress-label">加载模型</span><span id="progress-percent">—</span></div>
+              <button id="retry-poll-button" class="secondary-button hidden" type="button">重新连接查看任务</button>
               <button id="cancel-button" class="text-button" type="button" disabled>停止任务</button>
             </div>
             <img id="result-image" class="result-image hidden" alt="本地生成的图像" />
             <video id="result-video" class="result-video hidden" controls playsinline preload="metadata" aria-label="本地生成的视频"></video>
-            <div id="failed-state" class="failed-state hidden"><div class="failure-mark">!</div><h3 id="failure-title">生成失败</h3><p id="failure-message"></p><details class="error-details"><summary>查看 mflux 输出</summary><pre id="failure-log"></pre></details><button id="retry-button" class="secondary-button" type="button">返回修改参数</button></div>
+            <div id="failed-state" class="failed-state hidden"><div class="failure-mark">!</div><h3 id="failure-title">生成失败</h3><p id="failure-message"></p><details class="error-details"><summary>查看生成器输出</summary><pre id="failure-log"></pre></details><button id="retry-button" class="secondary-button" type="button">返回修改参数</button></div>
           </div>
           <div id="result-footer" class="result-footer hidden">
             <div class="result-meta"><span class="success-check">✓</span><div><b>生成完成</b><small id="result-details"></small></div></div>
