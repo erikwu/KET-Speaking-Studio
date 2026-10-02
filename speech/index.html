@@ -85,6 +85,34 @@
           <div id="practice-list" class="practice-list"></div>
           <div id="empty-state" class="empty-state"><span class="empty-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 5.8v12.4L18 12 8 5.8Z" /></svg></span><b>读取 Markdown 后开始练习</b><p>问句和答案会分段排列；Part 2 对话也会保留角色与上下文。</p></div>
         </section>
+
+        <section class="exam-card" aria-labelledby="exam-title">
+          <div class="section-heading">
+            <div><span class="step">04</span><h2 id="exam-title">模拟考</h2></div>
+            <span id="exam-availability" class="status-chip status-warn" role="status" aria-live="polite">正在检查本机考试能力…</span>
+          </div>
+          <p class="exam-intro">按 KET 口语顺序完成 Part 1 两个阶段和 Part 2 对话。答题录音只发给本机 127.0.0.1 服务进行识别与评分，不上传外网，识别后立即删除。</p>
+          <div class="exam-entry-actions"><button id="exam-start" class="primary-button" type="button" disabled>开始模拟考</button><span>评分评估切题、信息完整度、语法和词汇，不评发音或口音。</span></div>
+          <div id="exam-panel" class="exam-panel hidden" aria-live="off">
+            <div class="exam-session-heading"><span id="exam-stage" class="exam-stage">Part 1 · Phase 1</span><span id="exam-progress" class="exam-progress"></span></div>
+            <div id="exam-content" class="exam-content"></div>
+            <div id="exam-error" class="exam-error hidden" role="alert"></div>
+            <div id="exam-feedback" class="exam-feedback"></div>
+            <div class="exam-reference-tools">
+              <button id="exam-reference-toggle" class="quiet-button hidden" type="button" aria-expanded="false">查看参考答案</button>
+              <div id="exam-reference" class="exam-reference hidden"></div>
+            </div>
+            <div class="exam-controls">
+              <button id="exam-record" class="cache-button exam-record hidden" type="button">开始录音</button>
+              <button id="exam-stop" class="cache-button secondary hidden" type="button">停止并识别</button>
+              <button id="exam-retry-score" class="cache-button secondary hidden" type="button">重试评分</button>
+              <button id="exam-continue" class="primary-button hidden" type="button">下一题</button>
+              <button id="exam-end" class="quiet-button" type="button">结束考试</button>
+            </div>
+            <p id="exam-status" class="exam-status" role="status" aria-live="polite">等待开始</p>
+          </div>
+          <div id="exam-summary" class="exam-summary hidden" aria-live="polite"></div>
+        </section>
       </main>
       <footer><span>本地模型生成 · 语音保存于项目 outputs/speech-practice</span><span id="model-name"></span></footer>
     </div>

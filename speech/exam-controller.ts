@@ -1,0 +1,639 @@
+// @ts-check
+import { buildExamPlan, recordExamHint, summarizeExam } from "./exam-session.ts";
+import { startExamRecording } from "./exam-audio.ts";
+
+/** @typedef {{id:string,role:"Q"|"A"|"B",voiceRole:"question"|"answer",text:string,translation:string}} Turn */
+/** @typedef {{id:string,title:string,groups:Array<{id:string,number:number,context:string,turns:Turn[]}>}} Section */
+
+/** @param {Turn} turn */
+export function getPart1PromptDisplay(turn) {
+  return { audioTurn: turn, visibleQuestion: "" };
+}
+
+/** @param {Turn} turn */
+export function getPart2StudentPrompt(turn) {
+  return turn.translation;
+}
+
+/** @param {string} activeExamId @param {string} activeResponseId @param {string} responseExamId @param {string} responseId */
+export function isExamResponseCurrent(activeExamId, activeResponseId, responseExamId, responseId) {
+  return Boolean(activeExamId && activeResponseId && activeExamId === responseExamId && activeResponseId === responseId);
+}
+
+const SECTION_NAMES = { phase1: "Part 1 · Phase 1", phase2: "Part 1 · Phase 2", part2: "Part 2" };
+const $ = (selector) => document.querySelector(selector);
+
+/** @param {{getSections:()=>Section[],getExamAvailability:()=>{available:boolean,reason:string},speakText:(turn:Turn)=>Promise<void>,stopSpeech?:()=>void}} options */
+export function installExamController({ getSections, getExamAvailability, speakText, stopSpeech = () => {} }) {
+  const startButton = /** @type {HTMLButtonElement} */ $("#exam-start");
+  const availabilityNode = /** @type {HTMLElement} */ $("#exam-availability");
+  const sessionPanel = /** @type {HTMLElement} */ $("#exam-panel");
+  const summaryPanel = /** @type {HTMLElement} */ $("#exam-summary");
+  const contentNode = /** @type {HTMLElement} */ $("#exam-content");
+  const stageNode = /** @type {HTMLElement} */ $("#exam-stage");
+  const progressNode = /** @type {HTMLElement} */ $("#exam-progress");
+  const statusNode = /** @type {HTMLElement} */ $("#exam-status");
+  const errorNode = /** @type {HTMLElement} */ $("#exam-error");
+  const feedbackNode = /** @type {HTMLElement} */ $("#exam-feedback");
+  const referenceToggle = /** @type {HTMLButtonElement} */ $("#exam-reference-toggle");
+  const referenceNode = /** @type {HTMLElement} */ $("#exam-reference");
+  const recordButton = /** @type {HTMLButtonElement} */ $("#exam-record");
+  const stopButton = /** @type {HTMLButtonElement} */ $("#exam-stop");
+  const continueButton = /** @type {HTMLButtonElement} */ $("#exam-continue");
+  const endButton = /** @type {HTMLButtonElement} */ $("#exam-end");
+  const retryScoreButton = /** @type {HTMLButtonElement} */ $("#exam-retry-score");
+
+  let availability = { available: false, reason: "正在检查模拟考能力…" };
+  let plan = null;
+  let activeExamId = "";
+  let unitIndex = 0;
+  let sequenceIndex = 0;
+  let hintCounts = {};
+  let responseRecords = new Map();
+  let revealed = false;
+  let recordingSession = null;
+  let currentResponseId = "";
+  let currentQuestion = "";
+  let currentReference = "";
+  let questionPlaybackId = 0;
+  let disposed = false;
+
+  const unit = () => plan?.units[unitIndex] ?? null;
+  const responseIdFor = (current, turnIndex) => `${current.id}-response-${turnIndex}`;
+  const stagePosition = () => plan?.units.slice(0, unitIndex).filter((item) => item.sectionId === unit()?.sectionId).length + 1;
+  const stageTotal = () => plan?.units.filter((item) => item.sectionId === unit()?.sectionId).length;
+  const isCurrent = (examId, responseId) => isExamResponseCurrent(activeExamId, currentResponseId, examId, responseId);
+
+  function setError(message = "") {
+    errorNode.textContent = message;
+    errorNode.classList.toggle("hidden", !message);
+  }
+
+  function setStatus(message) {
+    statusNode.textContent = message;
+  }
+
+  function clearExamView() {
+    contentNode.replaceChildren();
+    feedbackNode.replaceChildren();
+    referenceNode.replaceChildren();
+    referenceNode.classList.add("hidden");
+    referenceToggle.classList.add("hidden");
+    referenceToggle.setAttribute("aria-expanded", "false");
+    referenceToggle.textContent = "查看参考答案";
+    revealed = false;
+    errorNode.classList.add("hidden");
+    recordButton.classList.add("hidden");
+    recordButton.disabled = true;
+    stopButton.classList.add("hidden");
+    continueButton.classList.add("hidden");
+    retryScoreButton.classList.add("hidden");
+  }
+
+  function addText(parent, tagName, className, text) {
+    const element = document.createElement(tagName);
+    if (className) element.className = className;
+    element.textContent = text;
+    parent.append(element);
+    return element;
+  }
+
+  function addExamButton(parent, label, className, action) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = className;
+    button.textContent = label;
+    button.addEventListener("click", action);
+    parent.append(button);
+    return button;
+  }
+
+  function renderAvailability() {
+    availability = getExamAvailability();
+    const hasSections = getSections().length > 0;
+    startButton.disabled = !availability.available || !hasSections || disposed;
+    if (!availability.available) {
+      availabilityNode.textContent = availability.reason || "本机考试模型和运行环境未就绪。";
+      availabilityNode.classList.add("status-warn");
+      availabilityNode.classList.remove("status-ready");
+    } else if (!hasSections) {
+      availabilityNode.textContent = "先读取一份含 Part 1 Phase 1、Phase 2 和 Part 2 的 Markdown 材料。";
+      availabilityNode.classList.add("status-warn");
+      availabilityNode.classList.remove("status-ready");
+    } else {
+      availabilityNode.textContent = "本机转写与评分已就绪 · 录音不会上传";
+      availabilityNode.classList.add("status-ready");
+      availabilityNode.classList.remove("status-warn");
+    }
+  }
+
+  function makeResponseRecord(current, turnIndex) {
+    const responseId = responseIdFor(current, turnIndex);
+    return {
+      responseId,
+      unitId: current.id,
+      sectionId: current.sectionId,
+      status: "unanswered",
+      turnIndex,
+    };
+  }
+
+  function beginExam() {
+    void cancelRecording();
+    const sections = getSections();
+    const nextPlan = buildExamPlan(sections);
+    if (nextPlan.missingSections.length) {
+      const names = nextPlan.missingSections.map((id) => SECTION_NAMES[id]).join("、");
+      const skipped = Object.entries(nextPlan.skippedCounts).filter(([, count]) => count > 0).map(([id, count]) => `${SECTION_NAMES[id]} ${count} 组`).join("；");
+      const message = `无法开始完整模拟考：缺少有效的 ${names}。${skipped ? ` 已跳过不完整题目：${skipped}。` : ""}请检查当前 Markdown 的题目结构。`;
+      availabilityNode.textContent = message;
+      availabilityNode.classList.add("status-warn");
+      availabilityNode.classList.remove("status-ready");
+      setError(message);
+      return;
+    }
+    plan = nextPlan;
+    const skippedGroups = Object.entries(nextPlan.skippedCounts).filter(([, count]) => count > 0).map(([id, count]) => `${SECTION_NAMES[id]} ${count} 组`).join("；");
+    if (skippedGroups) availabilityNode.textContent = `本次考试会跳过不完整题目：${skippedGroups}。`;
+    summaryPanel.replaceChildren();
+    activeExamId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+    unitIndex = 0;
+    sequenceIndex = 0;
+    hintCounts = {};
+    responseRecords = new Map();
+    for (const current of plan.units) {
+      const indexes = current.kind === "part2" ? current.studentTurnIndexes : [0];
+      for (const turnIndex of indexes) {
+        const record = makeResponseRecord(current, turnIndex);
+        responseRecords.set(record.responseId, record);
+      }
+    }
+    sessionPanel.classList.remove("hidden");
+    summaryPanel.classList.add("hidden");
+    startButton.classList.add("hidden");
+    setError("");
+    showCurrentUnit();
+  }
+
+  function renderReference() {
+    referenceNode.replaceChildren();
+    const current = unit();
+    if (!current) return;
+    if (current.kind === "part1") {
+      current.answers.forEach((answer, index) => {
+        const item = document.createElement("article");
+        item.className = "exam-reference-line";
+        addText(item, "span", "exam-reference-label", index === 0 ? "参考答案" : `表达变体 ${index}`);
+        addText(item, "p", "exam-reference-text", answer.text);
+        const speakButton = addExamButton(item, "听答案", "speak-button", () => { void speakText(answer).catch((error) => setError(error instanceof Error ? error.message : "参考答案播放失败。")); });
+        speakButton.setAttribute("aria-label", `播放参考答案 ${index + 1}`);
+        referenceNode.append(item);
+      });
+    } else {
+      current.turns.forEach((turn) => {
+        const item = document.createElement("article");
+        item.className = "exam-reference-line";
+        addText(item, "span", "exam-reference-label", `Speaker ${turn.role}`);
+        addText(item, "p", "exam-reference-text", turn.text);
+        const speakButton = addExamButton(item, "听台词", "speak-button", () => { void speakText(turn).catch((error) => setError(error instanceof Error ? error.message : "参考台词播放失败。")); });
+        referenceNode.append(item);
+      });
+    }
+  }
+
+  function toggleReference() {
+    const current = unit();
+    if (!current) return;
+    revealed = !revealed;
+    referenceToggle.setAttribute("aria-expanded", String(revealed));
+    referenceNode.classList.toggle("hidden", !revealed);
+    referenceToggle.textContent = revealed ? "隐藏参考内容" : current.kind === "part2" ? "查看参考台词" : "查看参考答案";
+    if (revealed) {
+      hintCounts = recordExamHint(hintCounts, current.id);
+      renderReference();
+    }
+  }
+
+  function renderResponseTranscript(record) {
+    feedbackNode.replaceChildren();
+    if (!record?.transcript) return;
+    const panel = document.createElement("section");
+    panel.className = "exam-transcript-panel";
+    addText(panel, "b", "", "本机识别到的回答");
+    addText(panel, "p", "exam-transcript", record.transcript);
+    if (record.status === "scored" && record.scores) {
+      const scoreGrid = document.createElement("div");
+      scoreGrid.className = "exam-score-grid";
+      const labels = { relevance: "切题度", completeness: "信息完整度", grammar: "语法", vocabulary: "词汇" };
+      for (const key of ["relevance", "completeness", "grammar", "vocabulary"]) {
+        const score = record.scores[key];
+        const tile = document.createElement("div");
+        tile.className = "exam-score-tile";
+        addText(tile, "span", "exam-score-label", labels[key]);
+        addText(tile, "strong", "exam-score-value", `${score.score} / 5`);
+        addText(tile, "small", "exam-score-feedback", score.feedback);
+        scoreGrid.append(tile);
+      }
+      panel.append(scoreGrid);
+      addText(panel, "p", "exam-total-score", `总分 ${record.scores.total} / 20`);
+    }
+    feedbackNode.append(panel);
+  }
+
+  function displayStudentPrompt(current, turnIndex) {
+    const responseId = responseIdFor(current, turnIndex);
+    const record = responseRecords.get(responseId);
+    currentResponseId = responseId;
+    if (current.kind === "part1") {
+      const question = getPart1PromptDisplay(current.question);
+      currentQuestion = question.audioTurn.text;
+      currentReference = current.answers[0].text;
+      addText(contentNode, "p", "exam-instruction", "请听问题，然后用英语回答。问题文字会保持隐藏。你可以重播问题，再开始录音。 ");
+      const replay = addExamButton(contentNode, "重播问题", "cache-button secondary", () => { void playPart1Question(current, true); });
+      replay.dataset.action = "replay-question";
+    } else {
+      const turn = current.turns[turnIndex];
+      const computerTurnsBefore = current.openingSpeaker === "computer" ? current.turns.slice(0, sequenceIndex + 1) : current.turns.slice(0, turnIndex);
+      const conversationCue = computerTurnsBefore.filter((candidate) => candidate.role !== turn.role).map((candidate) => `Speaker ${candidate.role}: ${candidate.text}`).join("\n");
+      currentQuestion = [current.group.context, `中文提示：${getPart2StudentPrompt(turn)}`, conversationCue].filter(Boolean).join("\n");
+      currentReference = turn.text;
+      addText(contentNode, "p", "exam-scene", current.group.context || `情景 ${current.group.number}`);
+      addText(contentNode, "span", "exam-speaker-label", `轮到你 · Speaker ${turn.role}`);
+      addText(contentNode, "p", "exam-chinese-prompt", getPart2StudentPrompt(turn));
+      addText(contentNode, "p", "exam-instruction", "请根据中文提示，用英语继续对话。 ");
+    }
+    referenceToggle.classList.remove("hidden");
+    renderResponseTranscript(record);
+    if (record?.status === "scored") {
+      continueButton.classList.remove("hidden");
+      continueButton.textContent = isLastStudentAction(current) ? "下一题" : "继续对话";
+    } else if (record?.transcript && record.status === "unscored") {
+      retryScoreButton.classList.remove("hidden");
+      recordButton.classList.add("hidden");
+      setStatus("转写已保留，评分暂时失败；可以只重试评分。");
+    } else {
+      recordButton.classList.remove("hidden");
+      recordButton.disabled = current.kind === "part1";
+      setStatus("准备就绪 · 点击开始录音后才会请求麦克风");
+    }
+  }
+
+  function isLastStudentAction(current) {
+    return current.kind === "part1" || sequenceIndex >= part2Actions(current).length - 1;
+  }
+
+  function part2Actions(current) {
+    return current.openingSpeaker === "computer"
+      ? [{ type: "computer", turnIndex: 0 }, { type: "student", turnIndex: 1 }, { type: "computer", turnIndex: 2 }]
+      : [{ type: "student", turnIndex: 0 }, { type: "computer", turnIndex: 1 }, { type: "student", turnIndex: 2 }];
+  }
+
+  async function playPart1Question(current, replay = false) {
+    if (unit()?.id !== current.id) return;
+    const display = getPart1PromptDisplay(current.question);
+    const examId = activeExamId;
+    const responseId = responseIdFor(current, 0);
+    const playbackId = ++questionPlaybackId;
+    recordButton.disabled = true;
+    try {
+      setStatus(replay ? "正在重播问题…" : "正在播放问题…");
+      await speakText(display.audioTurn);
+      if (playbackId === questionPlaybackId && isCurrent(examId, responseId) && unit()?.id === current.id) {
+        setStatus("问题播放完毕 · 可以开始录音");
+      }
+    } catch (error) {
+      if (playbackId === questionPlaybackId && isCurrent(examId, responseId) && unit()?.id === current.id) {
+        setError(error instanceof Error ? error.message : "问题播放失败，可重试播放。题目文字保持隐藏。");
+        setStatus("问题播放失败 · 可重试播放或继续录音");
+      }
+    } finally {
+      if (playbackId === questionPlaybackId && isCurrent(examId, responseId) && unit()?.id === current.id) {
+        const record = responseRecords.get(responseId);
+        recordButton.disabled = Boolean(record && record.status !== "unanswered");
+      }
+    }
+  }
+
+  async function playComputerTurn(current, action) {
+    const examId = activeExamId;
+    const actionToken = `${current.id}:${sequenceIndex}`;
+    const responseId = `${current.id}-computer-${action.turnIndex}`;
+    currentResponseId = responseId;
+    addText(contentNode, "p", "exam-scene", current.group.context || `情景 ${current.group.number}`);
+    referenceToggle.classList.remove("hidden");
+    referenceToggle.textContent = "查看参考台词";
+    const placeholder = document.createElement("p");
+    placeholder.className = "exam-instruction";
+    placeholder.textContent = "电脑正在说话，请听完后再继续。";
+    contentNode.append(placeholder);
+    const controls = document.createElement("div");
+    controls.className = "exam-inline-actions";
+    const replay = addExamButton(controls, "重播电脑台词", "cache-button secondary", () => { void retryComputerTurn(current, action, placeholder, controls); });
+    replay.disabled = true;
+    contentNode.append(controls);
+    recordButton.classList.add("hidden");
+    setStatus("正在播放电脑台词…");
+    try {
+      await speakText(current.turns[action.turnIndex]);
+      if (!isCurrent(examId, responseId) || unit()?.id !== current.id || `${current.id}:${sequenceIndex}` !== actionToken) return;
+      sequenceIndex += 1;
+      showCurrentUnit();
+    } catch (error) {
+      if (!isCurrent(examId, responseId) || unit()?.id !== current.id) return;
+      setError(error instanceof Error ? error.message : "电脑台词播放失败。");
+      setStatus("电脑台词没有播放完成。可以重播，或跳过这句后继续。");
+      replay.disabled = false;
+      addExamButton(controls, "跳过这句", "quiet-button", () => {
+        if (unit()?.id !== current.id) return;
+        sequenceIndex += 1;
+        showCurrentUnit();
+      });
+    }
+  }
+
+  async function retryComputerTurn(current, action, placeholder, controls) {
+    const examId = activeExamId;
+    const actionToken = `${current.id}:${sequenceIndex}`;
+    const responseId = `${current.id}-computer-${action.turnIndex}`;
+    placeholder.textContent = "正在重播电脑台词…";
+    controls.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+    setError("");
+    try {
+      await speakText(current.turns[action.turnIndex]);
+      if (isCurrent(examId, responseId) && unit()?.id === current.id && `${current.id}:${sequenceIndex}` === actionToken) {
+        sequenceIndex += 1;
+        showCurrentUnit();
+      }
+    } catch (error) {
+      if (!isCurrent(examId, responseId) || unit()?.id !== current.id) return;
+      placeholder.textContent = "电脑台词仍未播放成功。";
+      setError(error instanceof Error ? error.message : "电脑台词播放失败。");
+      controls.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+    }
+  }
+
+  function showCurrentUnit() {
+    if (disposed || !activeExamId || !plan) return;
+    const current = unit();
+    if (!current) return finishExam();
+    clearExamView();
+    stageNode.textContent = SECTION_NAMES[current.sectionId];
+    progressNode.textContent = `第 ${stagePosition()} / ${stageTotal()} 题`;
+    if (current.kind === "part1") {
+      currentResponseId = responseIdFor(current, 0);
+      displayStudentPrompt(current, 0);
+      void playPart1Question(current);
+      return;
+    }
+    const actions = part2Actions(current);
+    const action = actions[sequenceIndex];
+    if (!action) {
+      unitIndex += 1;
+      sequenceIndex = 0;
+      return showCurrentUnit();
+    }
+    if (action.type === "computer") void playComputerTurn(current, action);
+    else displayStudentPrompt(current, action.turnIndex);
+  }
+
+  async function beginRecording() {
+    if (!activeExamId || !currentResponseId || recordingSession || !unit()) return;
+    const examId = activeExamId;
+    const responseId = currentResponseId;
+    setError("");
+    recordButton.disabled = true;
+    setStatus("正在请求麦克风权限…");
+    try {
+      const session = await startExamRecording({
+        maxDurationMs: 120_000,
+        onAutoStop: () => { if (isCurrent(examId, responseId)) setStatus("已录满 120 秒，正在结束录音并识别…"); },
+      });
+      if (!isCurrent(examId, responseId)) {
+        await session.cancel();
+        return;
+      }
+      recordingSession = session;
+      recordButton.classList.add("hidden");
+      stopButton.classList.remove("hidden");
+      stopButton.disabled = false;
+      setStatus("正在录音 · 最长 120 秒 · 录音仅在本机处理");
+      session.completion.then((blob) => {
+        if (blob && isCurrent(examId, responseId)) void transcribeAnswer(blob, examId, responseId);
+      }).catch((error) => {
+        if (isCurrent(examId, responseId)) {
+          setError(error instanceof Error ? error.message : "录音转换失败，请重试。");
+          setStatus("录音失败 · 可重新录音");
+          recordButton.classList.remove("hidden");
+          recordButton.disabled = false;
+          stopButton.classList.add("hidden");
+        }
+      }).finally(() => {
+        if (recordingSession === session) recordingSession = null;
+      });
+    } catch (error) {
+      if (isCurrent(examId, responseId)) {
+        setError(error instanceof Error ? error.message : "无法开始录音。请检查浏览器麦克风权限和设备。");
+        setStatus("麦克风不可用 · 当前题目未改变");
+        recordButton.disabled = false;
+      }
+    }
+  }
+
+  async function stopRecording() {
+    if (!recordingSession) return;
+    stopButton.disabled = true;
+    setStatus("正在结束录音并准备本机识别…");
+    try { await recordingSession.stop(); }
+    catch (error) {
+      setError(error instanceof Error ? error.message : "录音处理失败，请重试。");
+      stopButton.classList.add("hidden");
+      recordButton.classList.remove("hidden");
+      recordButton.disabled = false;
+    }
+  }
+
+  async function cancelRecording() {
+    const session = recordingSession;
+    recordingSession = null;
+    if (session) await session.cancel().catch(() => {});
+  }
+
+  async function transcribeAnswer(blob, examId, responseId) {
+    if (!isCurrent(examId, responseId)) return;
+    const record = responseRecords.get(responseId);
+    if (!record) return;
+    stopButton.classList.add("hidden");
+    recordButton.classList.add("hidden");
+    setStatus("正在本机转写英文回答…");
+    try {
+      const response = await fetch("/api/exam/transcribe", { method: "POST", headers: { "content-type": "audio/wav" }, body: blob });
+      const result = await response.json();
+      if (!isCurrent(examId, responseId)) return;
+      if (!response.ok) throw new Error(result.error ?? "本机语音识别失败，请重新录音。");
+      if (typeof result.transcript !== "string" || !result.transcript.trim()) throw new Error("没有识别到英文回答，请重新录音。");
+      const nextRecord = { ...record, transcript: result.transcript.trim(), status: "unscored" };
+      responseRecords.set(responseId, nextRecord);
+      renderResponseTranscript(nextRecord);
+      setStatus("转写完成 · 正在本机语义评分…");
+      await scoreAnswer(examId, responseId);
+    } catch (error) {
+      if (!isCurrent(examId, responseId)) return;
+      setError(error instanceof Error ? error.message : "本机转写失败，请重新录音。");
+      setStatus("识别失败 · 当前题未前进，可重新录音");
+      recordButton.classList.remove("hidden");
+      recordButton.disabled = false;
+    }
+  }
+
+  async function scoreAnswer(examId, responseId) {
+    const record = responseRecords.get(responseId);
+    if (!record?.transcript || !isCurrent(examId, responseId)) return;
+    setError("");
+    retryScoreButton.disabled = true;
+    setStatus("正在本机语义评分…");
+    try {
+      const response = await fetch("/api/exam/score", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question: currentQuestion, reference: currentReference, transcript: record.transcript }),
+      });
+      const scores = await response.json();
+      if (!isCurrent(examId, responseId)) return;
+      if (!response.ok) throw new Error(scores.error ?? "本机评分失败，可重试评分。");
+      const nextRecord = { ...record, status: "scored", scores };
+      responseRecords.set(responseId, nextRecord);
+      renderResponseTranscript(nextRecord);
+      retryScoreButton.classList.add("hidden");
+      continueButton.classList.remove("hidden");
+      continueButton.textContent = isLastStudentAction(unit()) ? "下一题" : "继续对话";
+      setStatus("评分完成 · 练习参考分数，不是官方考试成绩");
+    } catch (error) {
+      if (!isCurrent(examId, responseId)) return;
+      const nextRecord = { ...record, status: "unscored" };
+      responseRecords.set(responseId, nextRecord);
+      renderResponseTranscript(nextRecord);
+      retryScoreButton.classList.remove("hidden");
+      retryScoreButton.disabled = false;
+      setError(error instanceof Error ? error.message : "本机评分失败，可保留转写后重试评分。");
+      setStatus("评分未完成 · 已保留转写，可只重试评分");
+    } finally {
+      retryScoreButton.disabled = false;
+    }
+  }
+
+  function retryScore() {
+    if (!currentResponseId) return;
+    void scoreAnswer(activeExamId, currentResponseId);
+  }
+
+  async function continueExam() {
+    const current = unit();
+    if (!current) return finishExam();
+    const record = responseRecords.get(currentResponseId);
+    if (record?.status !== "scored") return;
+    await cancelRecording();
+    if (current.kind === "part1") {
+      unitIndex += 1;
+      sequenceIndex = 0;
+    } else {
+      sequenceIndex += 1;
+    }
+    showCurrentUnit();
+  }
+
+  async function finishExam() {
+    if (!activeExamId || !plan) return;
+    await cancelRecording();
+    stopSpeech();
+    const summary = summarizeExam(plan.units, [...responseRecords.values()], hintCounts);
+    activeExamId = "";
+    currentResponseId = "";
+    sessionPanel.classList.add("hidden");
+    summaryPanel.classList.remove("hidden");
+    renderSummary(summary);
+    startButton.classList.remove("hidden");
+    startButton.textContent = "再考一次";
+    renderAvailability();
+  }
+
+  function renderSummary(summary) {
+    summaryPanel.replaceChildren();
+    const heading = document.createElement("div");
+    heading.className = "exam-summary-heading";
+    addText(heading, "h3", "", "本次模拟考结果");
+    addText(heading, "p", "", `已评分 ${summary.scoredCount} 题 · 未完成 ${summary.uncompletedCount} 题 · 查看提示 ${summary.hintCount} 次`);
+    summaryPanel.append(heading);
+    for (const sectionId of ["phase1", "phase2", "part2"]) {
+      const section = document.createElement("section");
+      section.className = "exam-summary-section";
+      const data = summary.bySection[sectionId];
+      const averages = data.averages;
+      addText(section, "h4", "", SECTION_NAMES[sectionId]);
+      addText(section, "p", "exam-summary-stats", `已评分 ${data.scoredCount} · 未完成 ${data.uncompletedCount} · 提示 ${data.hintCount} 次`);
+      addText(section, "p", "exam-summary-averages", `平均分：切题 ${formatAverage(averages.relevance)} · 完整 ${formatAverage(averages.completeness)} · 语法 ${formatAverage(averages.grammar)} · 词汇 ${formatAverage(averages.vocabulary)} · 总分 ${formatAverage(averages.total)} / 20`);
+      const items = document.createElement("div");
+      items.className = "exam-summary-items";
+      for (const record of [...responseRecords.values()].filter((item) => item.sectionId === sectionId)) {
+        const row = document.createElement("article");
+        row.className = "exam-summary-item";
+        const questionUnit = plan?.units.find((item) => item.id === record.unitId);
+        const number = (plan?.units.filter((item) => item.sectionId === sectionId).findIndex((item) => item.id === record.unitId) ?? -1) + 1;
+        const speaker = questionUnit?.kind === "part2" ? ` · Speaker ${questionUnit.turns[record.turnIndex]?.role}` : "";
+        addText(row, "b", "", `第 ${number} 题${speaker} · ${record.status === "scored" ? `${record.scores.total}/20` : "未完成"}`);
+        if (record.transcript) addText(row, "p", "exam-transcript", record.transcript);
+        if (record.status === "scored" && record.scores) {
+          addText(row, "small", "exam-score-feedback", `切题 ${record.scores.relevance.score} · 完整 ${record.scores.completeness.score} · 语法 ${record.scores.grammar.score} · 词汇 ${record.scores.vocabulary.score}`);
+        }
+        items.append(row);
+      }
+      section.append(items);
+      summaryPanel.append(section);
+    }
+    addExamButton(summaryPanel, "收起结果", "quiet-button", () => summaryPanel.classList.add("hidden"));
+  }
+
+  function formatAverage(value) {
+    return value === null ? "—" : value.toFixed(1);
+  }
+
+  startButton.addEventListener("click", beginExam);
+  recordButton.addEventListener("click", () => { void beginRecording(); });
+  stopButton.addEventListener("click", () => { void stopRecording(); });
+  continueButton.addEventListener("click", () => { void continueExam(); });
+  endButton.addEventListener("click", () => { void finishExam(); });
+  referenceToggle.addEventListener("click", toggleReference);
+  retryScoreButton.addEventListener("click", retryScore);
+
+  renderAvailability();
+  return {
+    refreshAvailability() { renderAvailability(); },
+    resetForMaterialChange() {
+      void cancelRecording();
+      activeExamId = "";
+      plan = null;
+      unitIndex = 0;
+      sequenceIndex = 0;
+      currentResponseId = "";
+      responseRecords.clear();
+      hintCounts = {};
+      sessionPanel.classList.add("hidden");
+      summaryPanel.classList.add("hidden");
+      summaryPanel.replaceChildren();
+      startButton.classList.remove("hidden");
+      startButton.textContent = "开始模拟考";
+      setError("");
+      renderAvailability();
+    },
+    dispose() {
+      disposed = true;
+      stopSpeech();
+      void cancelRecording();
+      activeExamId = "";
+      responseRecords.clear();
+      hintCounts = {};
+      sessionPanel.classList.add("hidden");
+      summaryPanel.classList.add("hidden");
+      renderAvailability();
+    },
+  };
+}

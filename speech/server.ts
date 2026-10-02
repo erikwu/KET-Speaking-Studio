@@ -1594,6 +1594,14 @@ const server = createServer(async (req, res) => {
     await serveFile(res, path.join(HERE, "exam-session.ts"), "text/javascript; charset=utf-8");
     return;
   }
+  if (req.method === "GET" && route === "/exam-audio.ts") {
+    await serveFile(res, path.join(HERE, "exam-audio.ts"), "text/javascript; charset=utf-8");
+    return;
+  }
+  if (req.method === "GET" && route === "/exam-controller.ts") {
+    await serveFile(res, path.join(HERE, "exam-controller.ts"), "text/javascript; charset=utf-8");
+    return;
+  }
   if (req.method === "GET" && route === "/styles.css") {
     await serveFile(res, path.join(HERE, "styles.css"), "text/css; charset=utf-8");
     return;

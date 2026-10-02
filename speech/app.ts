@@ -1,5 +1,6 @@
 // @ts-check
 import { getCacheActionState, resolvePlaybackMode } from "./cache-action-state.ts";
+import { installExamController } from "./exam-controller.ts";
 
 /** @typedef {{id:string,role:"Q"|"A"|"B",voiceRole:"question"|"answer",text:string,translation:string}} Turn */
 /** @typedef {{id:string,number:number,context:string,turns:Turn[]}} Group */
@@ -56,6 +57,9 @@ const player = /** @type {HTMLAudioElement} */ $("#audio-player");
 let sections = /** @type {Section[]} */ ([]);
 let activeSection = "phase1";
 let modelAvailable = false;
+let examAvailability = { available: false, reason: "正在检查本机考试能力…" };
+let examController = null;
+let playbackWaiter = null;
 let illustrationAvailable = false;
 let archiveToolsAvailable = false;
 let illustrationModelName = "Qwen Image";
@@ -78,11 +82,20 @@ function setError(message) {
   box.classList.toggle("hidden", !message);
 }
 
+function cancelPlaybackWait(message = "朗读已取消。") {
+  if (!playbackWaiter) return;
+  const waiter = playbackWaiter;
+  playbackWaiter = null;
+  waiter.reject(new Error(message));
+}
+
 function invalidatePlayback() {
+  cancelPlaybackWait("练习材料已切换，朗读已停止。");
   playbackRequestToken += 1;
   activePlaybackToken = 0;
   player.pause();
   player.onended = null;
+  player.onerror = null;
   player.removeAttribute("src");
   player.load();
   if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
@@ -152,6 +165,16 @@ async function loadConfig() {
   const response = await fetch("/api/config");
   const config = await response.json();
   modelAvailable = Boolean(config.speechAvailable ?? (config.modelReady && config.runtimeReady));
+  const missingExamCapabilities = [];
+  if (!config.asrModelReady) missingExamCapabilities.push("Whisper 英语识别模型");
+  if (!config.asrRuntimeReady) missingExamCapabilities.push("mlx-whisper 与 FFmpeg 运行环境");
+  if (!config.scoringModelReady) missingExamCapabilities.push("Qwen3 本机评分模型");
+  if (!config.scoringRuntimeReady) missingExamCapabilities.push("mlx-lm 评分运行环境");
+  examAvailability = {
+    available: Boolean(config.examAvailable),
+    reason: `模拟考暂不可用：缺少${missingExamCapabilities.join("、") || "本机考试运行环境"}。请运行 install.command 完成安装。`,
+  };
+  examController?.refreshAvailability();
   illustrationAvailable = Boolean(config.imageAvailable ?? config.illustrationReady);
   archiveToolsAvailable = Boolean(config.archiveToolsReady);
   illustrationModelName = config.illustrationModel || illustrationModelName;
@@ -523,10 +546,12 @@ async function startAudioCache(profile) {
 }
 
 function applyParsedMaterial(data) {
+  examController?.resetForMaterialChange();
   invalidatePlayback();
   sections = data.sections;
   loadedFilePath = data.filePath;
   materialKey = data.materialKey;
+  examController?.refreshAvailability();
   cachedPackageExists = false;
   $("#cache-count").textContent = "";
   updateBundleControls(false);
@@ -652,7 +677,8 @@ function speechInstruction(voiceRole, settingsSnapshot = settings) {
     .join(". ");
 }
 
-async function speak(button) {
+async function speak(button, { waitForEnd = false } = {}) {
+  cancelPlaybackWait("朗读被另一句语音替换。");
   const requestToken = ++playbackRequestToken;
   const requestedMaterialKey = materialKey;
   const requestedMode = playbackMode;
@@ -665,6 +691,7 @@ async function speak(button) {
   button.classList.add("is-loading");
   button.disabled = true;
   setError("");
+  let playbackFinished = null;
   try {
     let audioUrl = "";
     if ((requestedMode === "offline-first" || requestedMode === "offline-only") && requestedMaterialKey) {
@@ -705,17 +732,45 @@ async function speak(button) {
     player.src = audioUrl;
     audioCurrent = player;
     activePlaybackToken = requestToken;
+    if (waitForEnd) {
+      playbackFinished = new Promise((resolve, reject) => {
+        playbackWaiter = { token: requestToken, resolve, reject };
+      });
+    }
     player.onended = () => {
       if (activePlaybackToken !== requestToken) return;
       if (requestToken === playbackRequestToken) $("#playback-status").textContent = "朗读完成";
       if (currentObjectUrl) URL.revokeObjectURL(currentObjectUrl);
       currentObjectUrl = "";
       activePlaybackToken = 0;
+      if (playbackWaiter?.token === requestToken) {
+        const waiter = playbackWaiter;
+        playbackWaiter = null;
+        waiter.resolve();
+      }
+    };
+    player.onerror = () => {
+      if (activePlaybackToken !== requestToken) return;
+      if (playbackWaiter?.token === requestToken) {
+        const waiter = playbackWaiter;
+        playbackWaiter = null;
+        waiter.reject(new Error("语音播放失败，请重试。"));
+      }
     };
     await player.play();
+    if (playbackFinished) await playbackFinished;
     if (!isCurrentPlayback(requestToken, requestedMaterialKey)) return;
-    if (requestedMode === "realtime" || audioUrl.startsWith("/api/audio/")) $("#playback-status").textContent = "正在朗读 · 本地实时合成";
+    if (!waitForEnd && (requestedMode === "realtime" || audioUrl.startsWith("/api/audio/"))) $("#playback-status").textContent = "正在朗读 · 本地实时合成";
   } catch (error) {
+    if (waitForEnd) {
+      if (playbackWaiter?.token === requestToken) {
+        const waiter = playbackWaiter;
+        playbackWaiter = null;
+        waiter.reject(error instanceof Error ? error : new Error("无法播放生成的语音。"));
+      }
+      if (playbackFinished) await playbackFinished.catch(() => {});
+      throw error instanceof Error ? error : new Error("无法播放生成的语音。");
+    }
     if (isCurrentPlayback(requestToken, requestedMaterialKey)) {
       setError(error instanceof Error ? error.message : "无法播放生成的语音。");
       $("#playback-status").textContent = "朗读失败";
@@ -750,6 +805,19 @@ $("#playback-mode").addEventListener("change", (event) => {
   $("#playback-status").textContent = playbackMode === "offline-first" ? "离线优先；缺失语音时使用实时合成" : playbackMode === "offline-only" ? "仅播放离线语音" : "实时合成模式";
 });
 
+examController = installExamController({
+  getSections: () => sections,
+  getExamAvailability: () => examAvailability,
+  stopSpeech: () => invalidatePlayback(),
+  speakText: async (turn) => {
+    const button = document.createElement("button");
+    button.dataset.turnId = turn.id;
+    button.dataset.text = turn.text;
+    button.dataset.voiceRole = turn.voiceRole;
+    await speak(button, { waitForEnd: true });
+  },
+});
+window.addEventListener("pagehide", () => examController?.dispose(), { once: true });
 installSettings();
 pathInput.value = DEFAULT_PATH;
 async function initialize() {
