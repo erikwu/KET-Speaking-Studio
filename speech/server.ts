@@ -4,11 +4,14 @@ import { createHash, randomInt, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
 import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { tmpdir } from "node:os";
 import { pipeline } from "node:stream/promises";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
 import { readResourceBundleArchive, writeResourceBundleArchive, type ResourceBundleManifestV1 } from "./resource-bundle.ts";
 import { promoteResourceBundleFiles } from "./resource-bundle-store.ts";
+import { checkExamModels, type ExamModelState } from "./exam-models.ts";
+import { createExamInference, validateExamScore, validateExamWav } from "./exam-inference.ts";
 
 type SectionId = "phase1" | "phase2" | "part2";
 type VoiceRole = "question" | "answer";
@@ -110,6 +113,12 @@ const OFFLINE_BACKUP_DIR = path.join(AUDIO_DIR, "offline-audio.previous");
 const ILLUSTRATION_DIR = path.join(AUDIO_DIR, "scenario-images");
 const PYTHON = process.env.TTS_PYTHON ?? path.join(ROOT, ".venv", "bin", "python");
 const PY_WORKER = path.join(HERE, "mlx_worker.py");
+const ASR_MODEL_DIR = fromRoot(process.env.TTS_ASR_MODEL_PATH ?? "models/whisper-large-v3-turbo");
+const SCORING_MODEL_DIR = fromRoot(process.env.TTS_SCORING_MODEL_PATH ?? "models/Qwen3-4B-4bit");
+const EXAM_PYTHON = process.env.TTS_EXAM_PYTHON ?? PYTHON;
+const EXAM_WORKER = fromRoot(process.env.TTS_EXAM_WORKER_PATH ?? path.join("speech", "exam_worker.py"));
+const FFMPEG_PATH = process.env.TTS_FFMPEG_PATH ?? "ffmpeg";
+const EXAM_TEMP_DIR = path.join(tmpdir(), `ket-exam-${process.pid}-${randomUUID()}`);
 const IMAGE_CLI = fromRoot(process.env.MFLUX_CLI_PATH ?? ".venv/bin/mflux-generate-qwen-2.1");
 const IMAGE_MODELS = [
   path.join(ROOT, "models", "Qwen-Image-2.1-MLX-4bit-Heretic"),
@@ -152,6 +161,58 @@ let activeSpeechId: string | null = null;
 let dispatchingSpeech = false;
 let activeAudioCacheJob: string | null = null;
 let activeResourceBundleOperation: "export" | "import" | null = null;
+let examModelStatePromise: Promise<ExamModelState> | null = null;
+let examInference: ReturnType<typeof createExamInference> | null = null;
+
+
+function getExamModelState(): Promise<ExamModelState> {
+  if (!examModelStatePromise) {
+    examModelStatePromise = checkExamModels({
+      asrModelDir: ASR_MODEL_DIR,
+      scoringModelDir: SCORING_MODEL_DIR,
+      pythonPath: EXAM_PYTHON,
+      workerPath: EXAM_WORKER,
+      ffmpegPath: FFMPEG_PATH,
+    });
+  }
+  return examModelStatePromise;
+}
+
+async function getExamInference() {
+  const modelState = await getExamModelState();
+  if (!modelState.examAvailable) throw Object.assign(new Error("考试模型或本机运行环境未就绪。"), { status: 503 });
+  if (!examInference) {
+    examInference = createExamInference({
+      pythonPath: EXAM_PYTHON,
+      workerPath: EXAM_WORKER,
+      asrModelDir: ASR_MODEL_DIR,
+      scoringModelDir: SCORING_MODEL_DIR,
+      tempDirectory: EXAM_TEMP_DIR,
+    });
+  }
+  return examInference;
+}
+
+async function readExamAudioBody(req: IncomingMessage): Promise<Buffer> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  let oversized = false;
+  for await (const value of req) {
+    const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+    total += chunk.length;
+    if (total > 25 * 1024 * 1024) {
+      oversized = true;
+      continue;
+    }
+    chunks.push(chunk);
+  }
+  if (oversized) throw Object.assign(new Error("录音文件超过 25 MiB。"), { status: 413 });
+  return Buffer.concat(chunks, total);
+}
+
+function examClientError(message: string, status = 400): Error & { status: number } {
+  return Object.assign(new Error(message), { status });
+}
 
 function acquireResourceBundleOperation(operation: "export" | "import"): () => void {
   if (activeResourceBundleOperation || activeAudioCacheJob) {
@@ -1071,6 +1132,7 @@ const server = createServer(async (req, res) => {
     const imageModelReady = isImageModelDirectory(IMAGE_MODEL_DIR);
     const imageRuntimeReady = existsSync(IMAGE_CLI);
     const archiveToolsReady = existsSync("/usr/bin/zip") && existsSync("/usr/bin/unzip");
+    const examState = await getExamModelState();
     json(res, 200, {
       modelName: path.basename(MODEL_DIR),
       modelPath: path.relative(ROOT, MODEL_DIR),
@@ -1087,7 +1149,53 @@ const server = createServer(async (req, res) => {
       imageRuntimeReady,
       imageAvailable: imageModelReady && imageRuntimeReady,
       archiveToolsReady,
+      ...examState,
     });
+    return;
+  }
+  if (req.method === "POST" && route === "/api/exam/transcribe") {
+    const contentType = String(req.headers["content-type"] ?? "").split(";", 1)[0]!.trim().toLowerCase();
+    if (contentType !== "audio/wav") {
+      json(res, 415, { error: "录音请求需要使用 audio/wav。" });
+      return;
+    }
+    try {
+      const wav = await readExamAudioBody(req);
+      try { validateExamWav(wav); } catch (error) {
+        throw examClientError(error instanceof Error ? error.message : "录音不是有效的 PCM WAV 文件。");
+      }
+      const inference = await getExamInference();
+      json(res, 200, await inference.transcribe(wav));
+    } catch (error) {
+      const status = isRecord(error) && typeof error.status === "number" ? error.status : 500;
+      json(res, status, { error: error instanceof Error ? error.message : "本机语音识别失败，请重新录音。" });
+    }
+    return;
+  }
+  if (req.method === "POST" && route === "/api/exam/score") {
+    const contentType = String(req.headers["content-type"] ?? "").split(";", 1)[0]!.trim().toLowerCase();
+    if (contentType !== "application/json") {
+      json(res, 415, { error: "评分请求需要使用 application/json。" });
+      return;
+    }
+    try {
+      const input = await readJson(req);
+      if (!isRecord(input)) throw examClientError("评分请求格式不正确。");
+      for (const name of ["question", "reference", "transcript"]) {
+        const value = input[name];
+        if (typeof value !== "string" || !value.trim() || value.length > 3000) throw examClientError(`${name} 需要填写 1 到 3,000 个字符。`);
+      }
+      const inference = await getExamInference();
+      const result = await inference.score({
+        question: input.question as string,
+        reference: input.reference as string,
+        transcript: input.transcript as string,
+      });
+      json(res, 200, validateExamScore(result));
+    } catch (error) {
+      const status = isRecord(error) && typeof error.status === "number" ? error.status : 500;
+      json(res, status, { error: error instanceof Error ? error.message : "本机语义评分失败，可保留转写后重试评分。" });
+    }
     return;
   }
   if (req.method === "POST" && route === "/api/resource-bundles/import") {
@@ -1482,6 +1590,10 @@ const server = createServer(async (req, res) => {
     await serveFile(res, path.join(HERE, "cache-action-state.ts"), "text/javascript; charset=utf-8");
     return;
   }
+  if (req.method === "GET" && route === "/exam-session.ts") {
+    await serveFile(res, path.join(HERE, "exam-session.ts"), "text/javascript; charset=utf-8");
+    return;
+  }
   if (req.method === "GET" && route === "/styles.css") {
     await serveFile(res, path.join(HERE, "styles.css"), "text/css; charset=utf-8");
     return;
@@ -1495,3 +1607,11 @@ server.listen(port, "127.0.0.1", () => {
   console.log(`Local KET Speech Practice is ready at http://127.0.0.1:${port}`);
   console.log(`Model: ${path.relative(ROOT, MODEL_DIR)}`);
 });
+
+async function shutdown(): Promise<void> {
+  server.close();
+  await examInference?.dispose();
+  await rm(EXAM_TEMP_DIR, { recursive: true, force: true });
+}
+process.once("SIGINT", () => { void shutdown(); });
+process.once("SIGTERM", () => { void shutdown(); });
