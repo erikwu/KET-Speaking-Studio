@@ -367,6 +367,15 @@ test("config_reportsIndependentCapabilitiesWhenModelsAreMissing", async () => {
   }, async (root) => ({ speechModelPath: await createSpeechModelFixture(root) }));
 });
 
+test("browserCacheActionModule_isServedAsJavaScript", async () => {
+  await withServer(async ({ baseUrl }) => {
+    const response = await fetch(`${baseUrl}/cache-action-state.ts`);
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") ?? "", /^text\/javascript/);
+    assert.match(await response.text(), /export function getCacheActionState/);
+  });
+});
+
 test("offlinePlaybackWorksWithoutModelsAndSynthesisDoesNot", async () => {
   await withServer(async ({ root, baseUrl }) => {
     const { parsed } = await parseFixture(baseUrl, root);

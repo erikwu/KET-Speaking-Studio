@@ -1,4 +1,5 @@
 // @ts-check
+import { getCacheActionState } from "./cache-action-state.ts";
 
 /** @typedef {{id:string,role:"Q"|"A"|"B",voiceRole:"question"|"answer",text:string,translation:string}} Turn */
 /** @typedef {{id:string,number:number,context:string,turns:Turn[]}} Group */
@@ -65,6 +66,7 @@ let loadedFilePath = "";
 let materialKey = "";
 let cachePollToken = 0;
 let materialLoadToken = 0;
+let cachedPackageExists = false;
 let playbackRequestToken = 0;
 let activePlaybackToken = 0;
 let playbackMode = localStorage.getItem(PLAYBACK_MODE_KEY) === "offline-first" ? "offline-first" : "realtime";
@@ -418,20 +420,22 @@ function renderAudioCacheStatus(data) {
   const runningJob = data.job?.state === "running" ? data.job : null;
   const hasMaterial = Boolean(materialKey && loadedFilePath);
   const packageMatches = Boolean(data.matchesMaterial);
-  const packageExists = Boolean(data.packageExists);
+  if (typeof data.packageExists === "boolean") cachedPackageExists = data.packageExists;
+  const packageExists = typeof data.packageExists === "boolean" ? data.packageExists : cachedPackageExists;
   const generateButton = /** @type {HTMLButtonElement} */ $("#generate-cache");
   const replaceButton = /** @type {HTMLButtonElement} */ $("#replace-cache");
   const isRunning = Boolean(runningJob);
+  const actionState = getCacheActionState({ hasMaterial, modelAvailable, isRunning, packageExists });
 
   updateBundleControls(Boolean(data.exportReady && packageMatches));
 
   $("#cache-count").textContent = packageMatches ? `${data.cached}/${data.total} 句` : "";
-  generateButton.classList.toggle("hidden", packageMatches);
-  generateButton.textContent = packageExists && !packageMatches ? "为当前材料生成默认缓存" : "生成默认音色缓存";
-  generateButton.disabled = !hasMaterial || !modelAvailable || isRunning;
-  replaceButton.classList.toggle("hidden", !packageExists);
-  replaceButton.textContent = packageMatches ? "按当前标签重新生成并替换" : "按当前标签生成并替换现有缓存";
-  replaceButton.disabled = !hasMaterial || !modelAvailable || isRunning;
+  generateButton.classList.toggle("hidden", !actionState.showDefault);
+  generateButton.textContent = actionState.defaultLabel;
+  generateButton.disabled = actionState.disabled;
+  replaceButton.classList.toggle("hidden", !actionState.showReplace);
+  replaceButton.textContent = actionState.replaceLabel;
+  replaceButton.disabled = actionState.disabled;
 
   const progressWrap = $("#cache-progress-wrap");
   if (runningJob) {
@@ -470,7 +474,7 @@ async function refreshAudioCacheStatus() {
 async function followAudioCacheJob(initialJob) {
   const token = ++cachePollToken;
   let job = initialJob;
-  renderAudioCacheStatus({ packageExists: false, matchesMaterial: false, cached: 0, total: 0, job });
+  renderAudioCacheStatus({ job });
   while (job.state === "running" && token === cachePollToken) {
     await new Promise((resolve) => setTimeout(resolve, 1200));
     try {
@@ -479,7 +483,7 @@ async function followAudioCacheJob(initialJob) {
       if (!response.ok) throw new Error(updated.error ?? "读取缓存进度失败。");
       job = updated;
       if (token !== cachePollToken) return;
-      renderAudioCacheStatus({ packageExists: false, matchesMaterial: false, cached: 0, total: 0, job });
+      renderAudioCacheStatus({ job });
     } catch (error) {
       if (token === cachePollToken) setCacheStatus(error instanceof Error ? error.message : "读取缓存进度失败。");
       return;
@@ -515,6 +519,7 @@ function applyParsedMaterial(data) {
   sections = data.sections;
   loadedFilePath = data.filePath;
   materialKey = data.materialKey;
+  cachedPackageExists = false;
   $("#cache-count").textContent = "";
   updateBundleControls(false);
   activeSection = sections[0]?.id ?? "phase1";

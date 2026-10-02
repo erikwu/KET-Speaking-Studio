@@ -1469,6 +1469,10 @@ const server = createServer(async (req, res) => {
     await serveFile(res, path.join(HERE, "app.ts"), "text/javascript; charset=utf-8");
     return;
   }
+  if (req.method === "GET" && route === "/cache-action-state.ts") {
+    await serveFile(res, path.join(HERE, "cache-action-state.ts"), "text/javascript; charset=utf-8");
+    return;
+  }
   if (req.method === "GET" && route === "/styles.css") {
     await serveFile(res, path.join(HERE, "styles.css"), "text/css; charset=utf-8");
     return;
