@@ -7,8 +7,12 @@ VENV_DIR="$ROOT_DIR/.venv"
 PYTHON_BIN="$VENV_DIR/bin/python"
 TTS_MODEL_DIR="$ROOT_DIR/models/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
 IMAGE_MODEL_DIR="$ROOT_DIR/models/Qwen-Image-2.1-MLX-4bit"
+ASR_MODEL_DIR="$ROOT_DIR/models/whisper-large-v3-turbo"
+SCORING_MODEL_DIR="$ROOT_DIR/models/Qwen3-4B-4bit"
 APP_URL="http://127.0.0.1:8788/"
 IMAGE_MODEL_REPO="JoyFusionAI/Qwen-Image-2.1-MLX-4bit"
+ASR_MODEL_REPO="mlx-community/whisper-large-v3-turbo"
+SCORING_MODEL_REPO="mlx-community/Qwen3-4B-4bit"
 MFLUX_COMMIT="8c00dab2"
 
 say() {
@@ -134,6 +138,59 @@ if not (root / "processor" / "tokenizer.json").is_file():
 PY
 }
 
+verify_asr_model() {
+  local model_dir="${1:-$ASR_MODEL_DIR}"
+  "$PYTHON_BIN" - "$model_dir" <<'PY'
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+if not (root / "config.json").is_file() or not (root / "weights.safetensors").is_file():
+    raise SystemExit(1)
+PY
+}
+
+verify_scoring_model() {
+  local model_dir="${1:-$SCORING_MODEL_DIR}"
+  "$PYTHON_BIN" - "$model_dir" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1]).resolve()
+if not (root / "config.json").is_file() or not (root / "tokenizer.json").is_file():
+    raise SystemExit(1)
+index_path = root / "model.safetensors.index.json"
+if not index_path.is_file():
+    raise SystemExit(1)
+try:
+    weight_map = json.loads(index_path.read_text(encoding="utf-8")).get("weight_map", {})
+except (OSError, json.JSONDecodeError):
+    raise SystemExit(1)
+if not isinstance(weight_map, dict):
+    raise SystemExit(1)
+shards = set(weight_map.values())
+if not shards:
+    raise SystemExit(1)
+for shard in shards:
+    if not isinstance(shard, str) or not shard or Path(shard).is_absolute() or ".." in Path(shard).parts:
+        raise SystemExit(1)
+    shard_path = (root / shard).resolve()
+    if root not in shard_path.parents or not shard_path.is_file():
+        raise SystemExit(1)
+PY
+}
+
+ensure_ffmpeg() {
+  if command -v ffmpeg >/dev/null 2>&1; then
+    return
+  fi
+
+  say "正在通过 Homebrew 安装 FFmpeg"
+  brew install ffmpeg
+  command -v ffmpeg >/dev/null 2>&1 || fail "FFmpeg 安装后仍不可用。"
+}
+
 check_free_space() {
   local missing_gib required_gib available_kib
   missing_gib=0
@@ -142,6 +199,12 @@ check_free_space() {
   fi
   if ! verify_image_model >/dev/null 2>&1; then
     missing_gib=$((missing_gib + 23))
+  fi
+  if ! verify_asr_model "$ASR_MODEL_DIR" >/dev/null 2>&1; then
+    missing_gib=$((missing_gib + 2))
+  fi
+  if ! verify_scoring_model "$SCORING_MODEL_DIR" >/dev/null 2>&1; then
+    missing_gib=$((missing_gib + 3))
   fi
   if [[ "$missing_gib" -eq 0 ]]; then
     return
@@ -178,11 +241,19 @@ ensure_python_environment() {
     uv venv --python 3.13 "$VENV_DIR"
   fi
 
-  say "正在安装本地语音和图片模型运行环境"
-  uv pip install --python "$PYTHON_BIN" \
+  say "正在安装本地语音、图片和模拟考运行环境"
+  if ! uv pip install --python "$PYTHON_BIN" \
     mlx-audio \
     huggingface_hub \
+    "mlx-whisper==0.4.3" \
+    "mlx-lm==0.32.0" \
     "mflux @ git+https://github.com/mflux-community/mflux.git@${MFLUX_COMMIT}"
+  then
+    fail "MLX-Audio、mlx-whisper、mlx-lm 与 mflux 依赖安装或版本兼容检查失败。请查看上方信息并修复 Python/MLX 环境后重试。"
+  fi
+  if ! "$PYTHON_BIN" -c 'import mlx_audio, mlx_whisper, mlx_lm' >/dev/null 2>&1; then
+    fail "MLX-Audio、mlx-whisper 或 mlx-lm 无法导入；请检查 Python/MLX 依赖兼容性。"
+  fi
   [[ -x "$VENV_DIR/bin/hf" ]] || fail "Hugging Face 下载命令没有安装成功。"
   [[ -x "$VENV_DIR/bin/mflux-generate-qwen-2.1" ]] || fail "mflux 的 Qwen Image 2.1 命令没有安装成功。"
 }
@@ -208,10 +279,26 @@ download_models() {
     "$hf_bin" download "$IMAGE_MODEL_REPO" --local-dir "$IMAGE_MODEL_DIR"
     verify_image_model || fail "图片模型文件校验未通过。"
   fi
+
+  if verify_asr_model "$ASR_MODEL_DIR"; then
+    printf 'Whisper 英语识别模型已完整，跳过下载。\n'
+  else
+    say "正在下载 Whisper Large V3 Turbo 英语识别模型（约 1.6 GB）"
+    "$hf_bin" download "$ASR_MODEL_REPO" --local-dir "$ASR_MODEL_DIR"
+    verify_asr_model "$ASR_MODEL_DIR" || fail "Whisper 英语识别模型文件校验未通过。"
+  fi
+
+  if verify_scoring_model "$SCORING_MODEL_DIR"; then
+    printf 'Qwen3 本机评分模型已完整，跳过下载。\n'
+  else
+    say "正在下载 Qwen3-4B 4-bit 本机评分模型（约 2.3 GB）"
+    "$hf_bin" download "$SCORING_MODEL_REPO" --local-dir "$SCORING_MODEL_DIR"
+    verify_scoring_model "$SCORING_MODEL_DIR" || fail "Qwen3 本机评分模型文件校验未通过。"
+  fi
 }
 
 config_is_ready() {
-  "$NODE_BIN" -e 'let input="";process.stdin.setEncoding("utf8");process.stdin.on("data",chunk=>input+=chunk);process.stdin.on("end",()=>{try{const c=JSON.parse(input);process.exit(c.modelReady&&c.runtimeReady&&c.illustrationReady?0:1)}catch{process.exit(1)}})'
+  "$NODE_BIN" -e 'let input="";process.stdin.setEncoding("utf8");process.stdin.on("data",chunk=>input+=chunk);process.stdin.on("end",()=>{try{const c=JSON.parse(input);process.exit(c.modelReady&&c.runtimeReady&&c.illustrationReady&&c.examAvailable?0:1)}catch{process.exit(1)}})'
 }
 
 open_existing_server() {
@@ -268,6 +355,7 @@ main() {
   require_platform
   ensure_command_line_tools
   ensure_homebrew
+  ensure_ffmpeg
 
   if ! command -v uv >/dev/null 2>&1; then
     say "正在安装 uv"
@@ -287,4 +375,6 @@ main() {
   start_app
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

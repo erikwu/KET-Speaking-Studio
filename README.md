@@ -10,6 +10,8 @@
 
 页面还支持为整份材料生成本地离线语音缓存，以及为 Part 2 对话情景生成配图。配图由本机 Qwen Image 模型生成；这些功能都由 8788 服务调用，不需要另外打开 8787 页面。练习材料、语音缓存和情景图片保存在本机 `outputs/speech-practice/`。
 
+材料载入后也可以开始模拟考：Part 1 的问题只播放语音，Part 2 按随机开场顺序进行对话。网页在本机录音、用 Whisper 转写，并由本机 Qwen3 模型按切题度、信息完整度、语法和词汇评分，不评发音。考试录音、转写、分数和提示次数只保留在当前页面内存；刷新页面或切换材料后清除。首次安装还会下载 Whisper 和 Qwen3 评分模型，约增加 3.9 GB 权重；任一考试模型或运行环境缺失时，模拟考会禁用，逐句跟读和已有离线资源继续可用。
+
 跟读页还支持跨设备的离线资源包：完整离线语音通过校验后，可以下载 `.ketpack.zip`；压缩包包含当前 Markdown、该材料的全部 WAV，以及已经生成的 Part 2 配图，不包含模型或运行环境。在另一台 Mac 的 8788 页面导入后，材料会自动载入，可直接播放包内语音和查看图片。每次只保留一份活动语音包；成功导入会替换它，校验失败则保留原资源。
 
 ### 视觉生成工作室 · 8787
@@ -18,7 +20,7 @@
 
 ## 首次安装
 
-适用于 Apple Silicon Mac。双击项目根目录的 [`install.command`](install.command)，按提示完成依赖和本地模型安装。安装脚本会启动 KET Speaking 服务并打开 8788 页面。首次安装需要下载约 25 GB 的语音与图片模型，建议预留至少 40 GB 可用空间。系统要求、下载过程和模型许可说明见 [`speech/README.md`](speech/README.md)。
+适用于 Apple Silicon Mac。双击项目根目录的 [`install.command`](install.command)，按提示完成依赖和本地模型安装。安装脚本会启动 KET Speaking 服务并打开 8788 页面。现在会安装 TTS、图片、模拟考转写和评分模型；完整模型约 33 GiB，建议至少预留 40 GiB 可用空间（包含临时下载空间）。系统要求、下载过程和模型许可说明见 [`speech/README.md`](speech/README.md)。
 
 ## 启动服务
 
@@ -49,6 +51,7 @@ npm start
 ## 模型与本地文件
 
 - 8788 使用 `models/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16` 生成语音，并使用 Qwen Image 模型生成 Part 2 情景图。
+- 模拟考使用 [`mlx-community/whisper-large-v3-turbo`](https://huggingface.co/mlx-community/whisper-large-v3-turbo) 在本机转写英文，并使用 [`mlx-community/Qwen3-4B-4bit`](https://huggingface.co/mlx-community/Qwen3-4B-4bit) 在本机评分；两者约增加 3.9 GB 权重。Whisper 模型按 MIT 许可发布，Qwen3 按 Apache-2.0 许可发布；请以模型仓库随附的许可文件为准。
 - 8787 使用 Qwen Image 2.1 MLX 4-bit 模型生成图片；默认优先使用 `models/Qwen-Image-2.1-MLX-4bit-Heretic`，否则使用 `models/Qwen-Image-2.1-MLX-4bit`。
 - 8787 的图生视频模式使用 `models/Wan2.2-TI2V-5B-MLX-Q8` 和隔离环境 `.venv-wan22-mlx/bin/python`。两种模式共用任务状态和单任务锁，避免同时占用统一内存；缺少 Wan 文件时图像模式仍可独立使用。
 - 模型文件、语音缓存、输入材料和生成图片不纳入 Git 提交。模型的许可说明见 [`speech/README.md`](speech/README.md)。

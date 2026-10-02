@@ -4,15 +4,25 @@ TypeScript 本地网页读取 Markdown 中的 Part 1 / Phase 1、Part 1 / Phase 
 
 ## 新机器一键安装
 
-适用于 Apple Silicon Mac。双击项目根目录的 `install.command`，脚本会检查并准备 Homebrew、Node.js 22、Python 3.13 和项目 `.venv`，安装 MLX-Audio 与支持 Qwen Image 2.1 的 mflux，下载并校验语音和图片模型，随后启动服务并打开 <http://127.0.0.1:8788>。
+适用于 Apple Silicon Mac。双击项目根目录的 `install.command`，脚本会检查并准备 Homebrew、Node.js 22、Python 3.13、FFmpeg 和项目 `.venv`，安装 MLX-Audio、mlx-whisper、mlx-lm 与支持 Qwen Image 2.1 的 mflux，下载并校验语音、图片、模拟考转写和评分模型，随后启动服务并打开 <http://127.0.0.1:8788>。
 
-两个模型合计约 25 GB；首次安装建议至少有 40 GB 可用磁盘空间和稳定网络。若 macOS 尚未安装 Command Line Tools，脚本会打开 Apple 的安装窗口；完成后回到终端按回车继续。Homebrew 安装时可能要求输入本机管理员密码。模型下载支持断点续传，已校验完整的模型会跳过。
+TTS 与图片模型加上模拟考模型约需 33 GiB 磁盘空间；首次安装建议至少保留 40 GiB 可用空间和稳定网络。模拟考所需权重约 3.9 GB，安装器会按约 5 GiB 预留空间。若 macOS 尚未安装 Command Line Tools，脚本会打开 Apple 的安装窗口；完成后回到终端按回车继续。Homebrew 安装时可能要求输入本机管理员密码。模型下载支持断点续传，已校验完整的模型会跳过。
 
 安装完成后，服务会在打开的终端窗口持续运行；按 Control-C 停止。再次双击 `install.command` 可复用已安装环境和模型，并启动页面。
+
+考试模型分别为 [`mlx-community/whisper-large-v3-turbo`](https://huggingface.co/mlx-community/whisper-large-v3-turbo)（约 1.6 GB）和 [`mlx-community/Qwen3-4B-4bit`](https://huggingface.co/mlx-community/Qwen3-4B-4bit)（约 2.3 GB）。前者使用 MIT 许可，后者使用 Apache-2.0 许可；安装前请查看各 Hugging Face 仓库当前提供的模型卡和许可文件。安装器不替用户接受模型许可条款。
 
 图片模型 `JoyFusionAI/Qwen-Image-2.1-MLX-4bit` 是 Qwen Image 2.1 衍生模型，采用 Qwen Research License；商业用途需要另行取得许可。脚本只下载模型，不会替用户接受任何模型许可条款。
 
 首次朗读会加载语音模型。之后服务会在后台保留模型，逐句合成时无需反复重新加载。音频保存在 `outputs/speech-practice/`。
+
+## 模拟考
+
+读取包含 Part 1 / Phase 1、Part 1 / Phase 2 和 Part 2 的材料后，点击“开始模拟考”。Part 1 会播放问题但隐藏英文题面；学生录音回答后，本机 Whisper 识别英文，再由本机 Qwen3 按切题度、信息完整度、语法和词汇各 0–5 分评分，不评价口音或发音。Part 2 按情景随机选择学生或电脑先开，电脑台词播放完成后才进入学生的中文提示。
+
+点击“查看参考答案/台词”会累计提示次数。结束页提供各阶段逐题转写、分项得分、阶段均分、未完成题数和提示次数。评分失败时保留已有转写以便只重试评分；识别失败则可重新录音。录音最多 120 秒，由页面发送到同一台 Mac 的 `127.0.0.1` 服务处理；录音临时文件在处理后删除，录音、转写、评分和提示统计仅存在于本次页面内存，不写入 Markdown、离线资源包或持久化存储。刷新页面、关闭页面或切换材料会清除本场内容。
+
+模拟考要求完整安装 Whisper、Qwen3 评分模型、`mlx-whisper`、`mlx-lm` 和 FFmpeg。缺少任一组件时，入口会说明缺项并禁用开考；本地 TTS、已有离线语音和已缓存图片仍按各自能力继续使用。无模型 Mac 可按上文导入离线资源包进行普通跟读，但不能使用模拟考。
 
 ## 离线语音缓存
 
