@@ -1,10 +1,12 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomInt, randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { createReadStream, existsSync } from "node:fs";
+import { copyFile, lstat, mkdir, mkdtemp, open, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { writeResourceBundleArchive, type ResourceBundleManifestV1 } from "./resource-bundle.ts";
 
 type SectionId = "phase1" | "phase2" | "part2";
 type VoiceRole = "question" | "answer";
@@ -95,15 +97,18 @@ interface AudioCacheJob {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
-const MODEL_DIR = path.join(ROOT, "models", "Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16");
-const AUDIO_DIR = path.join(ROOT, "outputs", "speech-practice");
+function fromRoot(value: string): string {
+  return path.isAbsolute(value) ? path.normalize(value) : path.resolve(ROOT, value);
+}
+const MODEL_DIR = fromRoot(process.env.TTS_MODEL_PATH ?? "models/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16");
+const AUDIO_DIR = fromRoot(process.env.TTS_OUTPUT_DIR ?? "outputs/speech-practice");
 const OFFLINE_CACHE_DIR = path.join(AUDIO_DIR, "offline-audio");
 const OFFLINE_STAGING_DIR = path.join(AUDIO_DIR, "offline-audio.staging");
 const OFFLINE_BACKUP_DIR = path.join(AUDIO_DIR, "offline-audio.previous");
 const ILLUSTRATION_DIR = path.join(AUDIO_DIR, "scenario-images");
 const PYTHON = process.env.TTS_PYTHON ?? path.join(ROOT, ".venv", "bin", "python");
 const PY_WORKER = path.join(HERE, "mlx_worker.py");
-const IMAGE_CLI = path.join(ROOT, ".venv", "bin", "mflux-generate-qwen-2.1");
+const IMAGE_CLI = fromRoot(process.env.MFLUX_CLI_PATH ?? ".venv/bin/mflux-generate-qwen-2.1");
 const IMAGE_MODELS = [
   path.join(ROOT, "models", "Qwen-Image-2.1-MLX-4bit-Heretic"),
   path.join(ROOT, "models", "Qwen-Image-2.1-MLX-4bit"),
@@ -125,7 +130,9 @@ function isImageModelDirectory(candidate: string): boolean {
     existsSync(path.join(candidate, "processor", "tokenizer.json"))
   );
 }
-const IMAGE_MODEL_DIR = IMAGE_MODELS.find(isImageModelDirectory) ?? IMAGE_MODELS.at(-1)!;
+const IMAGE_MODEL_DIR = process.env.TTS_IMAGE_MODEL_PATH
+  ? fromRoot(process.env.TTS_IMAGE_MODEL_PATH)
+  : IMAGE_MODELS.find(isImageModelDirectory) ?? IMAGE_MODELS.at(-1)!;
 
 let worker: ChildProcess | null = null;
 let workerReady: Promise<void> | null = null;
@@ -796,6 +803,30 @@ function illustrationKey(filePath: string, context: string, dialogue: string): s
   return createHash("sha256").update(`${ILLUSTRATION_PROMPT_VERSION}\0${normalizedPath}\0${context.trim()}\0${dialogue.trim()}`).digest("hex").slice(0, 32);
 }
 
+async function hasPngSignature(filePath: string): Promise<boolean> {
+  const handle = await open(filePath, "r").catch(() => null);
+  if (!handle) return false;
+  try {
+    const header = Buffer.alloc(8);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    return bytesRead === 8 && header.equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  } finally {
+    await handle.close();
+  }
+}
+
+async function sha256File(filePath: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(filePath)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
+}
+
+function safeBundleDownloadFilename(filePath: string): string {
+  const sourceName = path.basename(filePath).replace(/\.md$/i, "");
+  const asciiName = sourceName.normalize("NFKD").replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^\.+|\.+$/g, "").slice(0, 100);
+  return `${asciiName || "practice"}.ketpack.zip`;
+}
+
 function scenarioImageUrls(key: string): string[] {
   return [1, 2]
     .filter((number) => existsSync(path.join(ILLUSTRATION_DIR, key, `picture-${number}.png`)))
@@ -1000,6 +1031,133 @@ const server = createServer(async (req, res) => {
       illustrationModel: path.basename(IMAGE_MODEL_DIR),
       illustrationReady: isImageModelDirectory(IMAGE_MODEL_DIR) && existsSync(IMAGE_CLI),
     });
+    return;
+  }
+  if (req.method === "GET" && route === "/api/resource-bundles/export") {
+    const requestedPath = url.searchParams.get("filePath") ?? "";
+    const requestedMaterialKey = url.searchParams.get("materialKey") ?? "";
+    if (!requestedPath.trim() || !/^[a-f0-9]{64}$/.test(requestedMaterialKey)) {
+      json(res, 400, { error: "请提供当前 Markdown 路径和有效的材料标识。" });
+      return;
+    }
+
+    let temporaryDirectory = "";
+    try {
+      const filePath = normalizeMarkdownPath(requestedPath);
+      if (path.extname(filePath).toLowerCase() !== ".md") {
+        json(res, 400, { error: "资源包只能导出 Markdown 练习材料。" });
+        return;
+      }
+      const markdownMetadata = await stat(filePath).catch(() => null);
+      if (!markdownMetadata?.isFile() || markdownMetadata.size > FILE_LIMIT) {
+        json(res, 409, { error: "当前 Markdown 文件不存在或超过 10 MB，无法导出。" });
+        return;
+      }
+      const markdown = await readFile(filePath);
+      const actualMaterialKey = materialIdentity(filePath, markdown.toString("utf8"));
+      if (actualMaterialKey !== requestedMaterialKey) {
+        json(res, 409, { error: "当前 Markdown 已变化，请重新读取材料后再导出。" });
+        return;
+      }
+      const sections = parseMarkdown(markdown.toString("utf8"));
+      const expectedTurns = sections.flatMap((section) => section.groups.flatMap((group) => group.turns));
+      const activeManifest = await readOfflineManifest(OFFLINE_CACHE_DIR);
+      if (
+        !activeManifest?.completedAt ||
+        activeManifest.materialKey !== actualMaterialKey ||
+        activeManifest.total !== expectedTurns.length ||
+        activeManifest.clips.length !== expectedTurns.length ||
+        activeManifest.clips.some((clip, index) => clip.id !== expectedTurns[index]?.id)
+      ) {
+        json(res, 409, { error: "当前材料没有完整且匹配的离线语音缓存，暂时无法导出。" });
+        return;
+      }
+
+      const sources: Array<{ entry: string; sourcePath: string }> = [{ entry: "material.md", sourcePath: filePath }];
+      const clips: ResourceBundleManifestV1["speech"]["clips"] = [];
+      for (const clip of activeManifest.clips) {
+        const audioPath = offlineClipPath(OFFLINE_CACHE_DIR, clip.id);
+        const audioMetadata = await lstat(audioPath).catch(() => null);
+        const audioHash = audioMetadata?.isFile() && !audioMetadata.isSymbolicLink()
+          ? await offlineClipHash(OFFLINE_CACHE_DIR, clip.id)
+          : null;
+        if (!audioMetadata?.isFile() || audioMetadata.isSymbolicLink() || !audioHash || audioHash !== clip.audioHash) {
+          json(res, 409, { error: `离线语音 ${clip.id} 缺失或校验失败，无法导出。` });
+          return;
+        }
+        sources.push({ entry: `audio/${clip.id}.wav`, sourcePath: audioPath });
+        clips.push({
+          id: clip.id,
+          entry: `audio/${clip.id}.wav`,
+          cacheKey: clip.cacheKey,
+          byteLength: audioMetadata.size,
+          sha256: audioHash,
+        });
+      }
+
+      const images: ResourceBundleManifestV1["images"] = [];
+      for (const section of sections.filter((candidate) => candidate.id === "part2")) {
+        for (const group of section.groups) {
+          const context = group.context || `口语练习情景 ${group.number}`;
+          const dialogue = group.turns.map((turn) => `${turn.role}: ${turn.text}`).join("\n");
+          const key = illustrationKey(filePath, context, dialogue);
+          for (const variant of [1, 2] as const) {
+            const imagePath = path.join(ILLUSTRATION_DIR, key, `picture-${variant}.png`);
+            const imageMetadata = await lstat(imagePath).catch(() => null);
+            if (!imageMetadata) continue;
+            if (!imageMetadata.isFile() || imageMetadata.isSymbolicLink() || !(await hasPngSignature(imagePath))) {
+              json(res, 409, { error: `情景配图 ${group.id}（${variant}）不是有效的 PNG 文件，无法导出。` });
+              return;
+            }
+            sources.push({ entry: `scenario-images/${group.id}-${variant}.png`, sourcePath: imagePath });
+            images.push({
+              groupId: group.id,
+              variant,
+              entry: `scenario-images/${group.id}-${variant}.png`,
+              byteLength: imageMetadata.size,
+              sha256: await sha256File(imagePath),
+            });
+          }
+        }
+      }
+
+      const bundleManifest: ResourceBundleManifestV1 = {
+        format: "ket-speaking-resource-bundle",
+        version: 1,
+        material: {
+          entry: "material.md",
+          filename: path.basename(filePath),
+          byteLength: markdownMetadata.size,
+          sha256: createHash("sha256").update(markdown).digest("hex"),
+        },
+        speech: {
+          profile: activeManifest.profile,
+          profileKey: activeManifest.profileKey,
+          total: activeManifest.total,
+          clips,
+        },
+        images,
+      };
+      await mkdir(AUDIO_DIR, { recursive: true });
+      temporaryDirectory = await mkdtemp(path.join(AUDIO_DIR, ".resource-export-"));
+      const archivePath = path.join(temporaryDirectory, safeBundleDownloadFilename(filePath));
+      await writeResourceBundleArchive({ manifest: bundleManifest, sources, archivePath });
+      const archiveMetadata = await stat(archivePath);
+      const downloadName = safeBundleDownloadFilename(filePath);
+      res.writeHead(200, {
+        "content-type": "application/zip",
+        "content-length": archiveMetadata.size,
+        "content-disposition": `attachment; filename="${downloadName}"; filename*=UTF-8''${encodeURIComponent(downloadName)}`,
+        "cache-control": "no-store",
+        "x-content-type-options": "nosniff",
+      });
+      await pipeline(createReadStream(archivePath), res);
+    } catch (error) {
+      if (res.headersSent) res.destroy(error instanceof Error ? error : undefined);
+      else json(res, 500, { error: error instanceof Error ? error.message : "创建离线资源包失败。" });
+    } finally {
+      if (temporaryDirectory) await rm(temporaryDirectory, { recursive: true, force: true });
+    }
     return;
   }
   if (req.method === "GET" && route === "/api/audio-cache/status") {
