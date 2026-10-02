@@ -5,6 +5,6 @@
   "scripts": {
     "start": "node --experimental-strip-types web/server.ts",
     "start:tts": "node --experimental-strip-types speech/server.ts",
-    "test:resource-bundles": "node --experimental-strip-types --test speech/resource-bundle.test.ts speech/resource-bundle-api.test.ts speech/resource-bundle-store.test.ts speech/cache-action-state.test.ts speech/exam-session.test.ts speech/exam-api.test.ts speech/exam-inference.test.ts web/server.test.ts"
+    "test:resource-bundles": "node --experimental-strip-types --test speech/resource-bundle.test.ts speech/resource-bundle-api.test.ts speech/resource-bundle-store.test.ts speech/cache-action-state.test.ts speech/exam-session.test.ts speech/exam-api.test.ts speech/exam-audio.test.ts speech/exam-inference.test.ts web/server.test.ts"
   }
 }
