@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, open, rm, writeFile } from "node:fs/promises";
+import { dirname } from "node:path";
 import type { Buffer } from "node:buffer";
 
 const MAX_WAV_BYTES = 25 * 1024 * 1024;
@@ -9,12 +10,28 @@ const MAX_FEEDBACK = 500;
 const DEFAULT_REQUEST_TIMEOUT_MS = 180_000;
 const START_TIMEOUT_MS = 60_000;
 const SCORE_DIMENSIONS = ["relevance", "completeness", "grammar", "vocabulary"] as const;
+const DIAGNOSTIC_CODES = new Set([
+  "missing_json_object", "malformed_json", "invalid_top_level_type", "unexpected_top_level_fields",
+  "invalid_feedback_fields", "invalid_dimension_shape", "invalid_score_value", "invalid_feedback_text",
+  "runtime_error", "unexpected_scoring_error", "invalid_worker_score", "worker_request_failed",
+]);
+
+/** @param {string} message @param {string} diagnosticCode */
+function scoreValidationError(message: string, diagnosticCode: string): Error & { diagnosticCode: string } {
+  return Object.assign(new Error(message), { diagnosticCode });
+}
+
+/** @param {unknown} value @returns {value is string} */
+export function isExamDiagnosticCode(value: unknown): value is string {
+  return typeof value === "string" && DIAGNOSTIC_CODES.has(value);
+}
 
 /** @typedef {{question:string,reference:string,transcript:string}} ExamScoreInput */
 /** @typedef {{score:number,feedback:string}} ExamDimension */
 /** @typedef {{relevance:ExamDimension,completeness:ExamDimension,grammar:ExamDimension,vocabulary:ExamDimension,total:number}} ExamScore */
-/** @typedef {{pythonPath:string,workerPath:string,asrModelDir:string,scoringModelDir:string,tempDirectory:string,spawnImpl?:typeof spawn,requestTimeoutMs?:number,env?:NodeJS.ProcessEnv,writeAudioFile?:typeof writeFile}} ExamInferenceOptions */
-/** @typedef {{resolve:(value:any)=>void,reject:(error:Error)=>void,timer:ReturnType<typeof setTimeout>}} PendingRequest */
+/** @typedef {{pythonPath:string,workerPath:string,asrModelDir:string,scoringModelDir:string,tempDirectory:string,diagnosticLogPath?:string,spawnImpl?:typeof spawn,requestTimeoutMs?:number,env?:NodeJS.ProcessEnv,writeAudioFile?:typeof writeFile}} ExamInferenceOptions */
+/** @typedef {{resolve:(value:any)=>void,reject:(error:Error)=>void,timer:ReturnType<typeof setTimeout>,kind:string}} PendingRequest */
+/** @typedef {Error & {diagnosticId?:string,diagnosticCode?:string,diagnosticLogSaved?:boolean}} ExamInferenceError */
 
 /** Validates the exact audio format accepted by the local ASR model. @param {Buffer} wav */
 export function validateExamWav(wav: Buffer): void {
@@ -55,16 +72,17 @@ export function validateExamWav(wav: Buffer): void {
 
 /** Validate worker output and calculate the total locally. @param {unknown} value @returns {ExamScore} */
 export function validateExamScore(value: unknown): ExamScore {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("本机评分结果格式无效。");
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw scoreValidationError("本机评分结果格式无效。", "invalid_top_level_type");
   const record = /** @type {Record<string,unknown>} */ (value);
-  if (Object.keys(record).length !== SCORE_DIMENSIONS.length || SCORE_DIMENSIONS.some((key) => !(key in record))) throw new Error("本机评分结果缺少必要维度。");
+  if (Object.keys(record).length !== SCORE_DIMENSIONS.length || SCORE_DIMENSIONS.some((key) => !(key in record))) throw scoreValidationError("本机评分结果缺少必要维度。", "unexpected_top_level_fields");
   /** @type {Record<string, ExamDimension>} */ const dimensions = {};
   for (const name of SCORE_DIMENSIONS) {
     const dimension = record[name];
-    if (typeof dimension !== "object" || dimension === null || Array.isArray(dimension)) throw new Error("本机评分维度格式无效。");
+    if (typeof dimension !== "object" || dimension === null || Array.isArray(dimension)) throw scoreValidationError("本机评分维度格式无效。", "invalid_dimension_shape");
     const fields = /** @type {Record<string,unknown>} */ (dimension);
-    if (Object.keys(fields).length !== 2 || !Number.isInteger(fields.score) || Number(fields.score) < 0 || Number(fields.score) > 5) throw new Error("本机评分超出 0 到 5 分范围。");
-    if (typeof fields.feedback !== "string" || !fields.feedback.trim() || fields.feedback.length > MAX_FEEDBACK || !/[\u3400-\u9fff]/.test(fields.feedback)) throw new Error("本机评分建议不是有效的中文反馈。");
+    if (Object.keys(fields).length !== 2) throw scoreValidationError("本机评分维度字段格式无效。", "invalid_dimension_shape");
+    if (!Number.isInteger(fields.score) || Number(fields.score) < 0 || Number(fields.score) > 5) throw scoreValidationError("本机评分超出 0 到 5 分范围。", "invalid_score_value");
+    if (typeof fields.feedback !== "string" || !fields.feedback.trim() || fields.feedback.length > MAX_FEEDBACK || !/[\u3400-\u9fff]/.test(fields.feedback)) throw scoreValidationError("本机评分建议不是有效的中文反馈。", "invalid_feedback_text");
     dimensions[name] = { score: Number(fields.score), feedback: fields.feedback.trim() };
   }
   return { ...dimensions, total: SCORE_DIMENSIONS.reduce((sum, name) => sum + dimensions[name]!.score, 0) };
@@ -101,6 +119,54 @@ export function createExamInference(options: ExamInferenceOptions) {
     }
   };
 
+  const writeDiagnostic = async (
+    stage: string,
+    error: unknown,
+    reasonCode: string,
+    input: ExamScoreInput,
+    workerResult?: unknown,
+    diagnosticContext?: Record<string, unknown>,
+  ): Promise<ExamInferenceError> => {
+    const diagnosticId = randomUUID().replaceAll("-", "").slice(0, 12);
+    const errorType = (error instanceof Error ? error.name : "Error").replace(/[^A-Za-z0-9_.]/g, "").slice(0, 80) || "Error";
+    const diagnosticCode = DIAGNOSTIC_CODES.has(reasonCode) ? reasonCode : "runtime_error";
+    let diagnosticLogSaved = false;
+    if (options.diagnosticLogPath) {
+      let descriptor: Awaited<ReturnType<typeof open>> | null = null;
+      try {
+        await mkdir(dirname(options.diagnosticLogPath), { recursive: true });
+        descriptor = await open(options.diagnosticLogPath, "a", 0o600);
+        await descriptor.chmod(0o600);
+        const entry = {
+          timestamp: new Date().toISOString(),
+          diagnosticId,
+          operation: "score",
+          stage,
+          reasonCode: diagnosticCode,
+          errorType,
+          scoringInput: input,
+          errorStack: error instanceof Error ? (error.stack ?? "").slice(0, 20_000) : "",
+          ...(workerResult === undefined ? {} : { workerResult }),
+          ...(typeof diagnosticContext?.scoringModel === "string" ? { scoringModel: diagnosticContext.scoringModel } : {}),
+          ...(typeof diagnosticContext?.modelPrompt === "string" ? { modelPrompt: diagnosticContext.modelPrompt } : {}),
+          ...(typeof diagnosticContext?.rawModelOutput === "string" ? { rawModelOutput: diagnosticContext.rawModelOutput } : {}),
+          generationConfig: { maxTokens: 420, temperature: 0 },
+        };
+        await descriptor.writeFile(`${JSON.stringify(entry)}\n`, "utf8");
+        diagnosticLogSaved = true;
+      } catch {
+        diagnosticLogSaved = false;
+      } finally {
+        await descriptor?.close().catch(() => {});
+      }
+    }
+    const wrapped = new Error("本机语义评分失败，可保留转写后重试评分。") as ExamInferenceError;
+    wrapped.diagnosticId = diagnosticId;
+    wrapped.diagnosticCode = diagnosticCode;
+    wrapped.diagnosticLogSaved = diagnosticLogSaved;
+    return wrapped;
+  };
+
   const failChild = (candidate: ChildProcess, error: Error) => {
     if (child !== candidate) return;
     readyReject?.(error);
@@ -134,8 +200,18 @@ export function createExamInference(options: ExamInferenceOptions) {
     if (!request) return;
     clearTimeout(request.timer);
     pending.delete(message.id);
-    if (message.ok === true) request.resolve(message.result);
-    else request.reject(new Error(request.kind === "score" ? "本机语义评分失败，可保留转写后重试评分。" : "本机语音识别失败，请重新录音。"));
+    if (message.ok === true) {
+      request.resolve(request.kind === "score"
+        ? { result: message.result, diagnosticContext: message.diagnosticContext }
+        : message.result);
+    }
+    else if (request.kind === "score") {
+      const error = new Error(typeof message.error === "string" ? message.error : "本机语义评分失败，可保留转写后重试评分。") as ExamInferenceError;
+      if (typeof message.diagnosticId === "string" && /^[A-Fa-f0-9]{12}$/.test(message.diagnosticId)) error.diagnosticId = message.diagnosticId;
+      if (typeof message.diagnosticCode === "string" && DIAGNOSTIC_CODES.has(message.diagnosticCode)) error.diagnosticCode = message.diagnosticCode;
+      if (typeof message.diagnosticLogSaved === "boolean") error.diagnosticLogSaved = message.diagnosticLogSaved;
+      request.reject(error);
+    } else request.reject(new Error(typeof message.error === "string" ? message.error : "本机语音识别失败，请重新录音。"));
   };
 
   const ensureWorker = async () => {
@@ -148,6 +224,7 @@ export function createExamInference(options: ExamInferenceOptions) {
       ...pythonUnbuffered, options.workerPath,
       "--asr-model", options.asrModelDir,
       "--scoring-model", options.scoringModelDir,
+      ...(options.diagnosticLogPath ? ["--diagnostic-log", options.diagnosticLogPath] : []),
     ], { stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, ...(options.env ?? {}), PYTHONUNBUFFERED: "1" } });
     child = candidate;
     let startupTimer: ReturnType<typeof setTimeout>;
@@ -223,8 +300,23 @@ export function createExamInference(options: ExamInferenceOptions) {
       for (const [name, value] of Object.entries(input)) {
         if (typeof value !== "string" || !value.trim() || value.length > MAX_SCORE_TEXT) throw new Error(`${name} 需要填写 1 到 ${MAX_SCORE_TEXT} 个字符。`);
       }
-      const result = await request({ type: "score", ...input });
-      return validateExamScore(result);
+      try {
+        const workerResponse = await request({ type: "score", ...input });
+        const responseRecord = isRecord(workerResponse) ? workerResponse : {};
+        const result = responseRecord.result;
+        const diagnosticContext = isRecord(responseRecord.diagnosticContext) ? responseRecord.diagnosticContext : undefined;
+        try {
+          return validateExamScore(result);
+        } catch (error) {
+          const reasonCode = error instanceof Error && "diagnosticCode" in error && typeof error.diagnosticCode === "string"
+            ? error.diagnosticCode
+            : "invalid_worker_score";
+          throw await writeDiagnostic("output_validation", error, reasonCode, input, result, diagnosticContext);
+        }
+      } catch (error) {
+        if (error instanceof Error && "diagnosticId" in error) throw error;
+        throw await writeDiagnostic("worker_request", error, "worker_request_failed", input);
+      }
     },
     async dispose(): Promise<void> {
       disposed = true;

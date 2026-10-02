@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { readResourceBundleArchive, writeResourceBundleArchive, type ResourceBundleManifestV1 } from "./resource-bundle.ts";
 import { promoteResourceBundleFiles } from "./resource-bundle-store.ts";
 import { checkExamModels, type ExamModelState } from "./exam-models.ts";
-import { createExamInference, validateExamWav } from "./exam-inference.ts";
+import { createExamInference, isExamDiagnosticCode, validateExamWav } from "./exam-inference.ts";
 import { stopWorkerProcess } from "./worker-shutdown.ts";
 
 type SectionId = "phase1" | "phase2" | "part2";
@@ -119,6 +119,7 @@ const SCORING_MODEL_DIR = fromRoot(process.env.TTS_SCORING_MODEL_PATH ?? "models
 const EXAM_PYTHON = process.env.TTS_EXAM_PYTHON ?? PYTHON;
 const EXAM_WORKER = fromRoot(process.env.TTS_EXAM_WORKER_PATH ?? path.join("speech", "exam_worker.py"));
 const FFMPEG_PATH = process.env.TTS_FFMPEG_PATH ?? "ffmpeg";
+const EXAM_DIAGNOSTIC_LOG = path.join(AUDIO_DIR, "exam-diagnostics.jsonl");
 const EXAM_TEMP_DIR = path.join(tmpdir(), `ket-exam-${process.pid}-${randomUUID()}`);
 const IMAGE_CLI = fromRoot(process.env.MFLUX_CLI_PATH ?? ".venv/bin/mflux-generate-qwen-2.1");
 const IMAGE_MODELS = [
@@ -190,6 +191,7 @@ async function getExamInference() {
       asrModelDir: ASR_MODEL_DIR,
       scoringModelDir: SCORING_MODEL_DIR,
       tempDirectory: EXAM_TEMP_DIR,
+      diagnosticLogPath: EXAM_DIAGNOSTIC_LOG,
     });
   }
   return examInference;
@@ -1202,7 +1204,18 @@ const server = createServer(async (req, res) => {
       json(res, 200, result);
     } catch (error) {
       const status = isRecord(error) && typeof error.status === "number" ? error.status : 500;
-      json(res, status, { error: error instanceof Error ? error.message : "本机语义评分失败，可保留转写后重试评分。" });
+      const diagnosticId = isRecord(error) && typeof error.diagnosticId === "string" ? error.diagnosticId : undefined;
+      const diagnosticCode = isRecord(error) && isExamDiagnosticCode(error.diagnosticCode) ? error.diagnosticCode : undefined;
+      const diagnosticLogSaved = isRecord(error) && typeof error.diagnosticLogSaved === "boolean" ? error.diagnosticLogSaved : undefined;
+      json(res, status, {
+        error: error instanceof Error ? error.message : "本机语义评分失败，可保留转写后重试评分。",
+        ...(diagnosticId ? {
+          diagnosticId,
+          diagnosticCode,
+          diagnosticLogSaved,
+          diagnosticLogPath: path.relative(ROOT, EXAM_DIAGNOSTIC_LOG),
+        } : {}),
+      });
     }
     return;
   }

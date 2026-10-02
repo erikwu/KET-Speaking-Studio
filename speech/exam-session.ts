@@ -10,16 +10,38 @@
 /** @typedef {{id:string,sectionId:"phase1"|"phase2",kind:"part1",group:ExamGroup,question:ExamTurn,answers:ExamTurn[]}} Part1ExamUnit */
 /** @typedef {{id:string,sectionId:"part2",kind:"part2",group:ExamGroup,turns:[ExamTurn,ExamTurn,ExamTurn],openingSpeaker:"computer"|"student",studentTurnIndexes:[1]|[0,2]}} Part2ExamUnit */
 /** @typedef {Part1ExamUnit|Part2ExamUnit} ExamUnit */
-/** @typedef {{units:ExamUnit[],skippedCounts:Record<ExamSectionId,number>,missingSections:ExamSectionId[]}} ExamPlan */
+/** @typedef {{units:ExamUnit[],skippedCounts:Record<ExamSectionId,number>,missingSections:ExamSectionId[],insufficientSections:Partial<Record<ExamSectionId,{available:number,required:number}>>}} ExamPlan */
 /** @typedef {{scoredCount:number,uncompletedCount:number,averages:Record<"relevance"|"completeness"|"grammar"|"vocabulary"|"total",number|null>,hintCount:number}} ExamSectionSummary */
 /** @typedef {{bySection:Record<ExamSectionId,ExamSectionSummary>,scoredCount:number,uncompletedCount:number,hintCount:number}} ExamSummary */
 
 const SECTION_ORDER = /** @type {const} */ (["phase1", "phase2", "part2"]);
 const SCORE_FIELDS = /** @type {const} */ (["relevance", "completeness", "grammar", "vocabulary", "total"]);
+const SECTION_QUESTION_LIMITS = /** @type {const} */ ({ phase1: 8, phase2: 8, part2: 3 });
 
 /**
- * Convert parser output into the fixed mock-exam sequence. Invalid groups are
- * omitted and counted; only accepted Part 2 scenarios consume randomness.
+ * Pick a random subset and randomize its order without mutating the source list.
+ * @template T
+ * @param {T[]} items
+ * @param {number} count
+ * @param {() => number} random
+ * @returns {T[]}
+ */
+function sampleWithoutReplacement(items, count, random) {
+  const pool = [...items];
+  const selectedCount = Math.min(count, pool.length);
+  if (selectedCount < count) return pool;
+  for (let index = 0; index < selectedCount; index += 1) {
+    const remaining = pool.length - index;
+    const offset = Math.min(remaining - 1, Math.max(0, Math.floor(random() * remaining)));
+    const selectedIndex = index + offset;
+    [pool[index], pool[selectedIndex]] = [pool[selectedIndex], pool[index]];
+  }
+  return pool.slice(0, selectedCount);
+}
+
+/**
+ * Convert parser output into a randomized fixed-size mock-exam sequence.
+ * Invalid groups are omitted and counted; each section is sampled independently.
  * @param {ExamSection[]} sections
  * @param {() => number} [random]
  * @returns {ExamPlan}
@@ -29,10 +51,11 @@ export function buildExamPlan(sections, random = Math.random) {
   /** @type {ExamUnit[]} */ const units = [];
   /** @type {Record<ExamSectionId, number>} */ const skippedCounts = { phase1: 0, phase2: 0, part2: 0 };
   /** @type {ExamSectionId[]} */ const missingSections = [];
+  /** @type {Partial<Record<ExamSectionId, {available:number,required:number}>>} */ const insufficientSections = {};
 
   for (const sectionId of SECTION_ORDER) {
     const section = sectionMap.get(sectionId);
-    let validCount = 0;
+    /** @type {ExamGroup[]} */ const validGroups = [];
     for (const group of section?.groups ?? []) {
       if (sectionId === "part2") {
         const firstThree = group.turns.slice(0, 3);
@@ -43,6 +66,28 @@ export function buildExamPlan(sections, random = Math.random) {
           skippedCounts.part2 += 1;
           continue;
         }
+        validGroups.push(group);
+      } else {
+        const question = group.turns[0];
+        const answers = group.turns.slice(1);
+        const isValid = question?.role === "Q" && answers.length > 0 && answers.every((turn) => turn.role === "A");
+        if (!isValid) {
+          skippedCounts[sectionId] += 1;
+          continue;
+        }
+        validGroups.push(group);
+      }
+    }
+    if (!validGroups.length) missingSections.push(sectionId);
+    const required = SECTION_QUESTION_LIMITS[sectionId];
+    if (validGroups.length < required) {
+      insufficientSections[sectionId] = { available: validGroups.length, required };
+    }
+
+    const sampledGroups = sampleWithoutReplacement(validGroups, required, random);
+    for (const group of sampledGroups) {
+      if (sectionId === "part2") {
+        const firstThree = group.turns.slice(0, 3);
         const studentStarts = random() >= 0.5;
         /** @type {[ExamTurn, ExamTurn, ExamTurn]} */ const turns = /** @type {[ExamTurn, ExamTurn, ExamTurn]} */ (firstThree);
         units.push({
@@ -57,19 +102,12 @@ export function buildExamPlan(sections, random = Math.random) {
       } else {
         const question = group.turns[0];
         const answers = group.turns.slice(1);
-        const isValid = question?.role === "Q" && answers.length > 0 && answers.every((turn) => turn.role === "A");
-        if (!isValid) {
-          skippedCounts[sectionId] += 1;
-          continue;
-        }
         units.push({ id: group.id, sectionId, kind: "part1", group, question, answers });
       }
-      validCount += 1;
     }
-    if (!validCount) missingSections.push(sectionId);
   }
 
-  return { units, skippedCounts, missingSections };
+  return { units, skippedCounts, missingSections, insufficientSections };
 }
 
 /**

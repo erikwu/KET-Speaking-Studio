@@ -36,7 +36,9 @@ export function installExamController({ getSections, getExamAvailability, speakT
   const practicePanel = /** @type {HTMLElement} */ $("#practice-card");
   const availabilityNode = /** @type {HTMLElement} */ $("#exam-availability");
   const sessionPanel = /** @type {HTMLElement} */ $("#exam-panel");
-  const summaryPanel = /** @type {HTMLElement} */ $("#exam-summary");
+  const summaryPanel = /** @type {HTMLDialogElement} */ $("#exam-summary");
+  const viewSummaryButton = /** @type {HTMLButtonElement} */ $("#exam-view-summary");
+  const scoreSoundButton = /** @type {HTMLButtonElement} */ $("#exam-score-sound");
   const contentNode = /** @type {HTMLElement} */ $("#exam-content");
   const stageNode = /** @type {HTMLElement} */ $("#exam-stage");
   const progressNode = /** @type {HTMLElement} */ $("#exam-progress");
@@ -50,6 +52,8 @@ export function installExamController({ getSections, getExamAvailability, speakT
   const continueButton = /** @type {HTMLButtonElement} */ $("#exam-continue");
   const endButton = /** @type {HTMLButtonElement} */ $("#exam-end");
   const retryScoreButton = /** @type {HTMLButtonElement} */ $("#exam-retry-score");
+  const rerecordScoreButton = /** @type {HTMLButtonElement} */ $("#exam-rerecord-score");
+  const skipScoreButton = /** @type {HTMLButtonElement|null} */ $("#exam-skip-score");
 
   let availability = { available: false, reason: "正在检查模拟考能力…" };
   let plan = null;
@@ -65,6 +69,9 @@ export function installExamController({ getSections, getExamAvailability, speakT
   let currentReference = "";
   let questionPlaybackId = 0;
   let disposed = false;
+  let scoreSoundEnabled = true;
+  let scoreAudioContext = /** @type {AudioContext|null} */ (null);
+  let summarySoundButton = /** @type {HTMLButtonElement|null} */ (null);
 
   const unit = () => plan?.units[unitIndex] ?? null;
   const responseIdFor = (current, turnIndex) => `${current.id}-response-${turnIndex}`;
@@ -79,6 +86,97 @@ export function installExamController({ getSections, getExamAvailability, speakT
 
   function setStatus(message) {
     statusNode.textContent = message;
+  }
+
+  function syncScoreSoundButtons() {
+    const label = `满分音效：${scoreSoundEnabled ? "开" : "关"}`;
+    for (const button of [scoreSoundButton, summarySoundButton]) {
+      if (!button) continue;
+      button.textContent = label;
+      button.setAttribute("aria-pressed", String(scoreSoundEnabled));
+    }
+  }
+
+  function toggleScoreSound() {
+    scoreSoundEnabled = !scoreSoundEnabled;
+    syncScoreSoundButtons();
+    if (scoreSoundEnabled) primeScoreAudio();
+  }
+
+  function primeScoreAudio() {
+    if (!scoreSoundEnabled || typeof window.AudioContext !== "function") return;
+    try {
+      scoreAudioContext ??= new window.AudioContext();
+      if (scoreAudioContext.state === "suspended") void scoreAudioContext.resume().catch(() => {});
+    } catch {
+      scoreAudioContext = null;
+    }
+  }
+
+  function playPerfectScoreSound() {
+    if (!scoreSoundEnabled || !scoreAudioContext) return;
+    const context = scoreAudioContext;
+    const playNotes = () => {
+      if (!scoreSoundEnabled) return;
+      const now = context.currentTime;
+      [659.25, 783.99, 1046.5].forEach((frequency, index) => {
+        const start = now + index * 0.105;
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        oscillator.type = "sine";
+        oscillator.frequency.setValueAtTime(frequency, start);
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(0.055, start + 0.018);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.29);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(start);
+        oscillator.stop(start + 0.3);
+      });
+    };
+    if (context.state === "running") playNotes();
+    else void context.resume().then(playNotes).catch(() => {});
+  }
+
+  function restoreAnswerActions(record) {
+    stopButton.classList.add("hidden");
+    if (record?.transcript && record.status === "unscored") {
+      recordButton.classList.add("hidden");
+      retryScoreButton.classList.remove("hidden");
+      retryScoreButton.disabled = false;
+      rerecordScoreButton.classList.remove("hidden");
+      rerecordScoreButton.disabled = false;
+      if (skipScoreButton) skipScoreButton.classList.remove("hidden");
+    } else {
+      recordButton.classList.remove("hidden");
+      recordButton.disabled = false;
+      retryScoreButton.classList.add("hidden");
+      rerecordScoreButton.classList.add("hidden");
+      skipScoreButton?.classList.add("hidden");
+    }
+  }
+
+  function formatScoringError(result) {
+    const message = typeof result?.error === "string" ? result.error : "本机评分失败，可重试评分。";
+    if (typeof result?.diagnosticId !== "string" || !/^[A-Fa-f0-9]{12}$/.test(result.diagnosticId)) return message;
+    const logPath = typeof result.diagnosticLogPath === "string" ? result.diagnosticLogPath : "outputs/speech-practice/exam-diagnostics.jsonl";
+    const logStatus = result.diagnosticLogSaved === true ? `诊断日志已写入 ${logPath}` : `诊断日志未能写入，请检查本机目录权限（${logPath}）`;
+    /** @type {Record<string,string>} */ const reasonLabels = {
+      missing_json_object: "模型没有返回评分 JSON 对象",
+      malformed_json: "模型返回的 JSON 无法解析",
+      invalid_top_level_type: "评分结果顶层格式无效",
+      unexpected_top_level_fields: "评分维度字段缺失或多余",
+      invalid_feedback_fields: "评分反馈字段格式无效",
+      invalid_dimension_shape: "某项评分缺少分数或反馈",
+      invalid_score_value: "评分不是 0 到 5 的整数",
+      invalid_feedback_text: "评分反馈为空或格式无效",
+      invalid_worker_score: "评分结果未通过本机结构校验",
+      worker_request_failed: "本机评分服务请求失败",
+      unexpected_scoring_error: "本机评分遇到未分类错误",
+      runtime_error: "评分运行阶段出错",
+    };
+    const reason = typeof result?.diagnosticCode === "string" ? reasonLabels[result.diagnosticCode] : "";
+    return `${message}${reason ? `\n诊断原因：${reason}。` : ""}\n诊断编号：${result.diagnosticId}。${logStatus}。`;
   }
 
   function clearExamView() {
@@ -96,6 +194,8 @@ export function installExamController({ getSections, getExamAvailability, speakT
     stopButton.classList.add("hidden");
     continueButton.classList.add("hidden");
     retryScoreButton.classList.add("hidden");
+    rerecordScoreButton.classList.add("hidden");
+    skipScoreButton?.classList.add("hidden");
   }
 
   function addText(parent, tagName, className, text) {
@@ -135,6 +235,26 @@ export function installExamController({ getSections, getExamAvailability, speakT
     }
   }
 
+  function enterExamMode() {
+    document.body?.classList.add("exam-mode");
+    if (document.fullscreenElement || !document.documentElement?.requestFullscreen) return;
+    try {
+      void document.documentElement.requestFullscreen().catch(() => {});
+    } catch {
+      // Keep the in-page focused layout when browser fullscreen is unavailable.
+    }
+  }
+
+  function exitExamMode() {
+    document.body?.classList.remove("exam-mode");
+    if (!document.fullscreenElement || !document.exitFullscreen) return;
+    try {
+      void document.exitFullscreen().catch(() => {});
+    } catch {
+      // Restoring the page layout does not depend on browser fullscreen support.
+    }
+  }
+
   function makeResponseRecord(current, turnIndex) {
     const responseId = responseIdFor(current, turnIndex);
     return {
@@ -150,10 +270,12 @@ export function installExamController({ getSections, getExamAvailability, speakT
     void cancelRecording();
     const sections = getSections();
     const nextPlan = buildExamPlan(sections);
-    if (nextPlan.missingSections.length) {
-      const names = nextPlan.missingSections.map((id) => SECTION_NAMES[id]).join("、");
+    if (nextPlan.missingSections.length || Object.keys(nextPlan.insufficientSections).length) {
+      const shortage = Object.entries(nextPlan.insufficientSections)
+        .map(([id, counts]) => `${SECTION_NAMES[id]} 需要 ${counts.required} 题，当前只有 ${counts.available} 题`)
+        .join("；");
       const skipped = Object.entries(nextPlan.skippedCounts).filter(([, count]) => count > 0).map(([id, count]) => `${SECTION_NAMES[id]} ${count} 组`).join("；");
-      const message = `无法开始完整模拟考：缺少有效的 ${names}。${skipped ? ` 已跳过不完整题目：${skipped}。` : ""}请检查当前 Markdown 的题目结构。`;
+      const message = `无法开始模拟考：题量不足，${shortage}。${skipped ? ` 已跳过不完整题目：${skipped}。` : ""}请检查当前 Markdown 的题目结构。`;
       availabilityNode.textContent = message;
       availabilityNode.classList.add("status-warn");
       availabilityNode.classList.remove("status-ready");
@@ -163,7 +285,11 @@ export function installExamController({ getSections, getExamAvailability, speakT
     plan = nextPlan;
     const skippedGroups = Object.entries(nextPlan.skippedCounts).filter(([, count]) => count > 0).map(([id, count]) => `${SECTION_NAMES[id]} ${count} 组`).join("；");
     if (skippedGroups) availabilityNode.textContent = `本次考试会跳过不完整题目：${skippedGroups}。`;
+    if (summaryPanel.open) summaryPanel.close();
     summaryPanel.replaceChildren();
+    summaryPanel.classList.add("hidden");
+    viewSummaryButton.classList.add("hidden");
+    summarySoundButton = null;
     activeExamId = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
     unitIndex = 0;
     sequenceIndex = 0;
@@ -176,6 +302,7 @@ export function installExamController({ getSections, getExamAvailability, speakT
         responseRecords.set(record.responseId, record);
       }
     }
+    enterExamMode();
     sessionPanel.classList.remove("hidden");
     practicePanel.classList.add("hidden");
     summaryPanel.classList.add("hidden");
@@ -237,14 +364,21 @@ export function installExamController({ getSections, getExamAvailability, speakT
       for (const key of ["relevance", "completeness", "grammar", "vocabulary"]) {
         const score = record.scores[key];
         const tile = document.createElement("div");
-        tile.className = "exam-score-tile";
+        const isPerfect = score.score === 5;
+        tile.className = `exam-score-tile${isPerfect ? " is-perfect-dimension" : ""}`;
         addText(tile, "span", "exam-score-label", labels[key]);
         addText(tile, "strong", "exam-score-value", `${score.score} / 5`);
+        if (isPerfect) addText(tile, "span", "exam-score-honor", "单项满分");
         addText(tile, "small", "exam-score-feedback", score.feedback);
         scoreGrid.append(tile);
       }
       panel.append(scoreGrid);
-      addText(panel, "p", "exam-total-score", `总分 ${record.scores.total} / 20`);
+      const isPerfect = record.scores.total === 20;
+      const total = document.createElement("div");
+      total.className = `exam-total-score${isPerfect ? " is-perfect-total" : ""}`;
+      addText(total, "span", "exam-total-label", isPerfect ? "完美表现" : "本题总分");
+      addText(total, "strong", "exam-total-value", `${record.scores.total} / 20`);
+      panel.append(total);
     }
     feedbackNode.append(panel);
   }
@@ -278,8 +412,9 @@ export function installExamController({ getSections, getExamAvailability, speakT
       continueButton.textContent = isLastStudentAction(current) ? "下一题" : "继续对话";
     } else if (record?.transcript && record.status === "unscored") {
       retryScoreButton.classList.remove("hidden");
+      rerecordScoreButton.classList.remove("hidden");
       recordButton.classList.add("hidden");
-      setStatus("转写已保留，评分暂时失败；可以只重试评分。");
+      setStatus("转写已保留，评分暂时失败；可以重试评分或重新录音。");
     } else {
       recordButton.classList.remove("hidden");
       recordButton.disabled = current.kind === "part1";
@@ -407,10 +542,17 @@ export function installExamController({ getSections, getExamAvailability, speakT
 
   async function beginRecording() {
     if (!activeExamId || !currentResponseId || recordingSession || !unit()) return;
+    primeScoreAudio();
     const examId = activeExamId;
     const responseId = currentResponseId;
     setError("");
     recordButton.disabled = true;
+    retryScoreButton.disabled = true;
+    rerecordScoreButton.disabled = true;
+    retryScoreButton.classList.add("hidden");
+    rerecordScoreButton.classList.add("hidden");
+    skipScoreButton?.classList.add("hidden");
+    continueButton.classList.add("hidden");
     setStatus("正在请求麦克风权限…");
     try {
       const session = await startRecording({
@@ -428,13 +570,12 @@ export function installExamController({ getSections, getExamAvailability, speakT
       setStatus("正在录音 · 最长 120 秒 · 录音仅在本机处理");
       session.completion.then((blob) => {
         if (blob && isCurrent(examId, responseId)) void transcribeAnswer(blob, examId, responseId);
+        else if (isCurrent(examId, responseId)) restoreAnswerActions(responseRecords.get(responseId));
       }).catch((error) => {
         if (isCurrent(examId, responseId)) {
           setError(error instanceof Error ? error.message : "录音转换失败，请重试。");
           setStatus("录音失败 · 可重新录音");
-          recordButton.classList.remove("hidden");
-          recordButton.disabled = false;
-          stopButton.classList.add("hidden");
+          restoreAnswerActions(responseRecords.get(responseId));
         }
       }).finally(() => {
         if (recordingSession === session) recordingSession = null;
@@ -443,7 +584,7 @@ export function installExamController({ getSections, getExamAvailability, speakT
       if (isCurrent(examId, responseId)) {
         setError(error instanceof Error ? error.message : "无法开始录音。请检查浏览器麦克风权限和设备。");
         setStatus("麦克风不可用 · 当前题目未改变");
-        recordButton.disabled = false;
+        restoreAnswerActions(responseRecords.get(responseId));
       }
     }
   }
@@ -458,9 +599,7 @@ export function installExamController({ getSections, getExamAvailability, speakT
     catch (error) {
       if (!isCurrent(examId, responseId)) return;
       setError(error instanceof Error ? error.message : "录音处理失败，请重试。");
-      stopButton.classList.add("hidden");
-      recordButton.classList.remove("hidden");
-      recordButton.disabled = false;
+      restoreAnswerActions(responseRecords.get(responseId));
     }
   }
 
@@ -492,8 +631,7 @@ export function installExamController({ getSections, getExamAvailability, speakT
       if (!isCurrent(examId, responseId)) return;
       setError(error instanceof Error ? error.message : "本机转写失败，请重新录音。");
       setStatus("识别失败 · 当前题未前进，可重新录音");
-      recordButton.classList.remove("hidden");
-      recordButton.disabled = false;
+      restoreAnswerActions(responseRecords.get(responseId));
     }
   }
 
@@ -502,6 +640,11 @@ export function installExamController({ getSections, getExamAvailability, speakT
     if (!record?.transcript || !isCurrent(examId, responseId)) return;
     setError("");
     retryScoreButton.disabled = true;
+    rerecordScoreButton.disabled = true;
+    retryScoreButton.classList.add("hidden");
+    rerecordScoreButton.classList.add("hidden");
+    skipScoreButton?.classList.add("hidden");
+    continueButton.classList.add("hidden");
     setStatus("正在本机语义评分…");
     try {
       const response = await fetch("/api/exam/score", {
@@ -511,25 +654,35 @@ export function installExamController({ getSections, getExamAvailability, speakT
       });
       const scores = await response.json();
       if (!isCurrent(examId, responseId)) return;
-      if (!response.ok) throw new Error(scores.error ?? "本机评分失败，可重试评分。");
+      if (!response.ok) throw new Error(formatScoringError(scores));
       const nextRecord = { ...record, status: "scored", scores };
       responseRecords.set(responseId, nextRecord);
       renderResponseTranscript(nextRecord);
+      if (scores.total === 20) playPerfectScoreSound();
       retryScoreButton.classList.add("hidden");
+      rerecordScoreButton.classList.add("hidden");
+      skipScoreButton?.classList.add("hidden");
       continueButton.classList.remove("hidden");
       continueButton.textContent = isLastStudentAction(unit()) ? "下一题" : "继续对话";
-      setStatus("评分完成 · 练习参考分数，不是官方考试成绩");
+      setStatus(scores.total === 20 ? "本题满分 20 / 20 · 练习参考分数，不是官方考试成绩" : "评分完成 · 练习参考分数，不是官方考试成绩");
     } catch (error) {
       if (!isCurrent(examId, responseId)) return;
       const nextRecord = { ...record, status: "unscored" };
       responseRecords.set(responseId, nextRecord);
       renderResponseTranscript(nextRecord);
       retryScoreButton.classList.remove("hidden");
+      rerecordScoreButton.classList.remove("hidden");
       retryScoreButton.disabled = false;
-      setError(error instanceof Error ? error.message : "本机评分失败，可保留转写后重试评分。");
-      setStatus("评分未完成 · 已保留转写，可只重试评分");
+      rerecordScoreButton.disabled = false;
+      if (skipScoreButton) {
+        skipScoreButton.textContent = unit()?.kind === "part2" ? "跳过评分，继续对话" : "跳过评分，下一题";
+        skipScoreButton.classList.remove("hidden");
+      }
+      setError(error instanceof Error ? error.message : "本机评分失败，可保留转写后重试评分或重新录音。");
+      setStatus("评分未完成 · 已保留转写，可重试评分或重新录音");
     } finally {
       retryScoreButton.disabled = false;
+      rerecordScoreButton.disabled = false;
     }
   }
 
@@ -553,6 +706,20 @@ export function installExamController({ getSections, getExamAvailability, speakT
     showCurrentUnit();
   }
 
+  async function skipUnscoredResponse() {
+    const current = unit();
+    const record = responseRecords.get(currentResponseId);
+    if (!current || record?.status !== "unscored" || !record.transcript) return;
+    await cancelRecording();
+    if (current.kind === "part1") {
+      unitIndex += 1;
+      sequenceIndex = 0;
+    } else {
+      sequenceIndex += 1;
+    }
+    showCurrentUnit();
+  }
+
   async function finishExam() {
     if (!activeExamId || !plan) return;
     await cancelRecording();
@@ -560,10 +727,13 @@ export function installExamController({ getSections, getExamAvailability, speakT
     const summary = summarizeExam(plan.units, [...responseRecords.values()], hintCounts);
     activeExamId = "";
     currentResponseId = "";
+    exitExamMode();
     sessionPanel.classList.add("hidden");
     practicePanel.classList.remove("hidden");
-    summaryPanel.classList.remove("hidden");
     renderSummary(summary);
+    summaryPanel.classList.remove("hidden");
+    summaryPanel.showModal();
+    viewSummaryButton.classList.remove("hidden");
     startButton.classList.remove("hidden");
     startButton.textContent = "再考一次";
     renderAvailability();
@@ -571,10 +741,20 @@ export function installExamController({ getSections, getExamAvailability, speakT
 
   function renderSummary(summary) {
     summaryPanel.replaceChildren();
-    const heading = document.createElement("div");
+    summarySoundButton = null;
+    const heading = document.createElement("header");
     heading.className = "exam-summary-heading";
-    addText(heading, "h3", "", "本次模拟考结果");
-    addText(heading, "p", "", `已评分 ${summary.scoredCount} 题 · 未完成 ${summary.uncompletedCount} 题 · 查看提示 ${summary.hintCount} 次`);
+    const copy = document.createElement("div");
+    copy.className = "exam-summary-heading-copy";
+    addText(copy, "h3", "", "本次模拟考结果").id = "exam-summary-title";
+    addText(copy, "p", "", `已评分 ${summary.scoredCount} 题 · 未完成 ${summary.uncompletedCount} 题 · 查看提示 ${summary.hintCount} 次`).id = "exam-summary-meta";
+    const actions = document.createElement("div");
+    actions.className = "exam-summary-actions";
+    summarySoundButton = addExamButton(actions, "", "quiet-button exam-sound-toggle", toggleScoreSound);
+    summarySoundButton.setAttribute("aria-pressed", String(scoreSoundEnabled));
+    syncScoreSoundButtons();
+    addExamButton(actions, "关闭", "quiet-button", () => summaryPanel.close()).setAttribute("aria-label", "关闭成绩面板");
+    heading.append(copy, actions);
     summaryPanel.append(heading);
     for (const sectionId of ["phase1", "phase2", "part2"]) {
       const section = document.createElement("section");
@@ -592,17 +772,35 @@ export function installExamController({ getSections, getExamAvailability, speakT
         const questionUnit = plan?.units.find((item) => item.id === record.unitId);
         const number = (plan?.units.filter((item) => item.sectionId === sectionId).findIndex((item) => item.id === record.unitId) ?? -1) + 1;
         const speaker = questionUnit?.kind === "part2" ? ` · Speaker ${questionUnit.turns[record.turnIndex]?.role}` : "";
-        addText(row, "b", "", `第 ${number} 题${speaker} · ${record.status === "scored" ? `${record.scores.total}/20` : "未完成"}`);
+        const itemHeading = document.createElement("div");
+        itemHeading.className = "exam-summary-item-heading";
+        addText(itemHeading, "b", "", `第 ${number} 题${speaker}`);
+        if (record.status === "scored" && record.scores) {
+          const isPerfect = record.scores.total === 20;
+          if (isPerfect) row.classList.add("is-perfect");
+          const score = addText(itemHeading, "span", `exam-summary-score${isPerfect ? " is-perfect-total" : ""}`, `${record.scores.total} / 20`);
+          score.setAttribute("aria-label", isPerfect ? "本题满分 20 分" : `本题 ${record.scores.total} 分，共 20 分`);
+          if (isPerfect) addText(itemHeading, "span", "exam-score-honor", "满分");
+        } else {
+          addText(itemHeading, "span", "exam-summary-unscored", "未完成");
+        }
+        row.append(itemHeading);
         if (record.transcript) addText(row, "p", "exam-transcript", record.transcript);
         if (record.status === "scored" && record.scores) {
-          addText(row, "small", "exam-score-feedback", `切题 ${record.scores.relevance.score} · 完整 ${record.scores.completeness.score} · 语法 ${record.scores.grammar.score} · 词汇 ${record.scores.vocabulary.score}`);
+          const dimensions = document.createElement("div");
+          dimensions.className = "exam-summary-dimensions";
+          for (const [key, label] of [["relevance", "切题"], ["completeness", "完整"], ["grammar", "语法"], ["vocabulary", "词汇"]]) {
+            const value = record.scores[key];
+            const dimension = addText(dimensions, "span", `exam-summary-dimension${value.score === 5 ? " is-perfect-dimension" : ""}`, `${label} ${value.score}`);
+            if (value.score === 5) dimension.setAttribute("aria-label", `${label}度单项满分 5 分`);
+          }
+          row.append(dimensions);
         }
         items.append(row);
       }
       section.append(items);
       summaryPanel.append(section);
     }
-    addExamButton(summaryPanel, "收起结果", "quiet-button", () => summaryPanel.classList.add("hidden"));
   }
 
   function formatAverage(value) {
@@ -610,18 +808,32 @@ export function installExamController({ getSections, getExamAvailability, speakT
   }
 
   startButton.addEventListener("click", beginExam);
+  viewSummaryButton.addEventListener("click", () => {
+    if (!summaryPanel.open) summaryPanel.showModal();
+    syncScoreSoundButtons();
+  });
+  scoreSoundButton.addEventListener("click", toggleScoreSound);
+  summaryPanel.addEventListener("click", (event) => {
+    if (event.target === summaryPanel) summaryPanel.close();
+  });
+  summaryPanel.addEventListener("close", () => {
+    if (!viewSummaryButton.classList.contains("hidden")) viewSummaryButton.focus();
+  });
   recordButton.addEventListener("click", () => { void beginRecording(); });
   stopButton.addEventListener("click", () => { void stopRecording(); });
   continueButton.addEventListener("click", () => { void continueExam(); });
   endButton.addEventListener("click", () => { void finishExam(); });
   referenceToggle.addEventListener("click", toggleReference);
   retryScoreButton.addEventListener("click", retryScore);
+  rerecordScoreButton.addEventListener("click", () => { void beginRecording(); });
+  skipScoreButton?.addEventListener("click", () => { void skipUnscoredResponse(); });
 
   renderAvailability();
   return {
     refreshAvailability() { renderAvailability(); },
     resetForMaterialChange() {
       void cancelRecording();
+      if (summaryPanel.open) summaryPanel.close();
       activeExamId = "";
       plan = null;
       unitIndex = 0;
@@ -629,10 +841,13 @@ export function installExamController({ getSections, getExamAvailability, speakT
       currentResponseId = "";
       responseRecords.clear();
       hintCounts = {};
+      exitExamMode();
       sessionPanel.classList.add("hidden");
       practicePanel.classList.remove("hidden");
       summaryPanel.classList.add("hidden");
       summaryPanel.replaceChildren();
+      viewSummaryButton.classList.add("hidden");
+      summarySoundButton = null;
       startButton.classList.remove("hidden");
       startButton.textContent = "开始模拟考";
       setError("");
@@ -642,12 +857,18 @@ export function installExamController({ getSections, getExamAvailability, speakT
       disposed = true;
       stopSpeech();
       void cancelRecording();
+      if (summaryPanel.open) summaryPanel.close();
       activeExamId = "";
       responseRecords.clear();
       hintCounts = {};
+      exitExamMode();
       sessionPanel.classList.add("hidden");
       practicePanel.classList.remove("hidden");
       summaryPanel.classList.add("hidden");
+      viewSummaryButton.classList.add("hidden");
+      summarySoundButton = null;
+      void scoreAudioContext?.close().catch(() => {});
+      scoreAudioContext = null;
       renderAvailability();
     },
   };
