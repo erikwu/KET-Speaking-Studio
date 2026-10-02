@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "node --experimental-strip-types web/server.ts",
-    "start:tts": "node --experimental-strip-types speech/server.ts"
+    "start:tts": "node --experimental-strip-types speech/server.ts",
+    "test:resource-bundles": "node --experimental-strip-types --test speech/resource-bundle.test.ts"
   }
 }
