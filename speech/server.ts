@@ -1614,6 +1614,10 @@ const server = createServer(async (req, res) => {
       if (!itemCount) throw new Error("没有找到 Part 1 / Phase 1、Part 1 / Phase 2 或 Part 2 中的 Q/A 台词。请检查标题和 Q:/A:/B: 格式。");
       json(res, 200, { filePath, materialKey: materialIdentity(filePath, markdown), sections, itemCount });
     } catch (error) {
+      if (isRecord(error) && (error.code === "ENOENT" || error.code === "ENOTDIR")) {
+        json(res, 404, { error: "找不到这个 Markdown 文件，可能已移动、删除或尚未同步到本机。请展开「读取文件与离线语音」，填写本机有效的文件路径，或导入资源包。" });
+        return;
+      }
       const status = isRecord(error) && typeof error.status === "number" ? error.status : 400;
       json(res, status, { error: error instanceof Error ? error.message : "无法读取 Markdown 文件。" });
     }

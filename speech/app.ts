@@ -8,7 +8,6 @@ import { installUpdateControls } from "./update-controls.ts";
 /** @typedef {{id:"phase1"|"phase2"|"part2",title:string,groups:Group[]}} Section */
 /** @typedef {{filePath:string,materialKey:string,sections:Section[],itemCount:number}} ParsedFile */
 
-const DEFAULT_PATH = "/Users/erik/Library/Mobile Documents/iCloud~md~obsidian/Documents/MyWiki/2.Wiki/000.生活总结/个人英语学习/KET口语常用问答_9岁儿童_表达变体.md";
 const TAGS = {
   voice: [
     { id: "clear", label: "清晰自然", prompt: "speaking clearly with natural English pronunciation" },
@@ -827,10 +826,10 @@ examController = installExamController({
 updateControls = installUpdateControls({ isExamActive: () => examController?.isActive() ?? false });
 window.addEventListener("pagehide", () => examController?.dispose(), { once: true });
 installSettings();
-pathInput.value = localStorage.getItem("ket-speaking-last-material") || DEFAULT_PATH;
+pathInput.value = localStorage.getItem("ket-speaking-last-material") || "";
 async function initialize() {
   await loadConfig();
-  await loadFile();
+  if (pathInput.value.trim()) await loadFile();
 }
 initialize().catch((error) => {
   setError(error instanceof Error ? error.message : "本地服务初始化失败。");

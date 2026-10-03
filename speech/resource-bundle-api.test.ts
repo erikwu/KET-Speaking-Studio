@@ -137,6 +137,23 @@ async function parseFixture(baseUrl: string, root: string, markdownContent: stri
   return { filePath, parsed };
 }
 
+test("parse gives recovery guidance for a missing Markdown file and still accepts valid material", async () => {
+  await withServer(async ({ baseUrl, root }) => {
+    const response = await fetch(`${baseUrl}/api/parse`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: path.join(root, "moved-material.md") }),
+    });
+    assert.equal(response.status, 404);
+    const body = await response.json();
+    assert.match(body.error, /找不到.*Markdown/);
+    assert.match(body.error, /路径|资源包/);
+    assert.doesNotMatch(body.error, /ENOENT|stat|\/Users\//);
+    const { parsed } = await parseFixture(baseUrl, root);
+    assert.equal(parsed.itemCount, 6);
+  });
+});
+
 test("parse retains KET sections across topic subheadings and excludes later notes", async () => {
   await withServer(async ({baseUrl, root}) => {
     const {parsed} = await parseFixture(baseUrl, root, `---
