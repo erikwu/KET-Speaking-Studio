@@ -9,6 +9,6 @@ export function getCacheActionState(input) {
 }
 
 export function resolvePlaybackMode(requestedMode, speechAvailable) {
-  if (!speechAvailable) return "offline-only";
+  if (!speechAvailable) return "offline-first";
   return requestedMode === "offline-first" ? "offline-first" : "realtime";
 }

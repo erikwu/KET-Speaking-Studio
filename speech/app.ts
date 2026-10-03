@@ -170,6 +170,13 @@ async function loadConfig() {
   version.textContent = config.appVersion && config.appVersion !== "unknown" ? `v${config.appVersion}` : "版本未知";
   version.title = `当前服务版本：${config.appVersion ?? "未知"}`;
   modelAvailable = Boolean(config.speechAvailable ?? (config.modelReady && config.runtimeReady));
+  for (const selector of ["#material-options", "#voice-options"]) {
+    const panel = /** @type {HTMLDetailsElement} */ $(selector);
+    if (!panel.dataset.initialized) {
+      panel.open = modelAvailable;
+      panel.dataset.initialized = "true";
+    }
+  }
   const missingExamCapabilities = [];
   if (!config.asrModelReady) missingExamCapabilities.push("Whisper 英语识别模型");
   if (!config.asrRuntimeReady) missingExamCapabilities.push("mlx-whisper 与 FFmpeg 运行环境");
@@ -201,21 +208,12 @@ async function loadConfig() {
   }
   const playbackSelect = /** @type {HTMLSelectElement} */ $("#playback-mode");
   playbackSelect.disabled = !modelAvailable;
-  let offlineOnlyOption = playbackSelect.querySelector('option[value="offline-only"]');
+  playbackMode = resolvePlaybackMode(playbackMode, modelAvailable);
+  playbackSelect.value = playbackMode;
+  playbackSelect.querySelector('option[value="offline-first"]').textContent = modelAvailable ? "离线优先，缺失时实时合成" : "离线优先";
   if (!modelAvailable) {
-    if (!offlineOnlyOption) {
-      offlineOnlyOption = document.createElement("option");
-      offlineOnlyOption.value = "offline-only";
-      offlineOnlyOption.textContent = "仅播放离线语音";
-      playbackSelect.append(offlineOnlyOption);
-    }
-    playbackMode = resolvePlaybackMode(playbackMode, modelAvailable);
-    playbackSelect.value = playbackMode;
-    $("#playback-mode-note").textContent = "当前没有本地语音模型：只播放已导入的离线语音，缺少的句子会提示不可用。音色和语气标签不会影响离线语音。";
+    $("#playback-mode-note").textContent = "优先播放已导入的离线语音；缺少时请导入包含该语音的资源包。本机没有语音模型，无法实时合成；音色和语气标签不会影响离线语音。";
   } else {
-    offlineOnlyOption?.remove();
-    playbackMode = resolvePlaybackMode(playbackMode, modelAvailable);
-    playbackSelect.value = playbackMode;
     $("#playback-mode-note").textContent = "缓存任务在后台逐句生成，可继续练习。离线语音使用生成时保存的音色；重新生成完成后才会替换旧缓存。";
   }
   const importButton = /** @type {HTMLButtonElement} */ $("#import-bundle");
@@ -710,7 +708,7 @@ async function speak(button, { waitForEnd = false } = {}) {
         audioUrl = URL.createObjectURL(audioBlob);
         $("#playback-status").textContent = "正在播放本机离线语音";
       } else {
-        if (requestedMode === "offline-only") throw new Error("这句话没有可用的离线语音。请导入包含该语音的资源包，或在有模型的 Mac 上重新生成并导出。");
+        if (requestedMode === "offline-only" || !modelAvailable) throw new Error("这句话没有可用的离线语音。请导入包含该语音的资源包，或在有模型的 Mac 上重新生成并导出。");
         $("#playback-status").textContent = "此句没有离线缓存，正在按当前标签实时合成…";
       }
     }
@@ -809,7 +807,7 @@ $("#export-bundle").addEventListener("click", () => void exportResourceBundle())
 $("#playback-mode").addEventListener("change", (event) => {
   playbackMode = resolvePlaybackMode(/** @type {HTMLSelectElement} */ (event.currentTarget).value, modelAvailable);
   localStorage.setItem(PLAYBACK_MODE_KEY, playbackMode);
-  $("#playback-status").textContent = playbackMode === "offline-first" ? "离线优先；缺失语音时使用实时合成" : playbackMode === "offline-only" ? "仅播放离线语音" : "实时合成模式";
+  $("#playback-status").textContent = !modelAvailable ? "离线优先；缺少语音时请导入资源包" : playbackMode === "offline-first" ? "离线优先；缺失语音时使用实时合成" : "实时合成模式";
 });
 
 examController = installExamController({

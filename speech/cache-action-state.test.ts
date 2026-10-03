@@ -22,8 +22,11 @@ test("cacheActionState_showsOnlyReplacementWhenAnyCompleteCacheExists", () => {
   });
 });
 
-test("resolvePlaybackMode_allowsOfflineOnlyOnlyWhenSpeechIsUnavailable", () => {
-  assert.equal(resolvePlaybackMode("offline-only", false), "offline-only");
+test("resolvePlaybackMode_usesOfflineFirstWithoutSpeechAndPreservesFullInstallPreferences", () => {
+  assert.equal(resolvePlaybackMode("realtime", false), "offline-first");
+  assert.equal(resolvePlaybackMode("offline-only", false), "offline-first");
   assert.equal(resolvePlaybackMode("offline-only", true), "realtime");
-  assert.equal(resolvePlaybackMode("offline-first", false), "offline-only");
+  assert.equal(resolvePlaybackMode("offline-first", false), "offline-first");
+  assert.equal(resolvePlaybackMode("offline-first", true), "offline-first");
+  assert.equal(resolvePlaybackMode("realtime", true), "realtime");
 });

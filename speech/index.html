@@ -37,37 +37,41 @@
               <button id="export-bundle" class="cache-button hidden" type="button" disabled>下载离线资源包</button>
             </div>
           </section>
-          <div class="path-row">
-            <input id="file-path" type="text" spellcheck="false" aria-label="Markdown 文件路径" />
-            <button id="load-file" class="primary-button" type="button">读取文件 <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M6 14 14 6M7 6h7v7" /></svg></button>
-          </div>
           <div class="source-meta"><span id="file-name">尚未读取文件</span><span id="item-count"></span></div>
-          <section id="audio-cache-panel" class="audio-cache-panel" aria-labelledby="audio-cache-title">
-            <div class="cache-heading">
-              <div><h3 id="audio-cache-title">离线语音</h3><p id="audio-cache-status" role="status" aria-live="polite" aria-atomic="true">读取材料后查看缓存状态</p></div>
-              <span id="cache-count" class="cache-count"></span>
+          <details id="material-options" class="material-options">
+            <summary>读取文件与离线语音</summary>
+            <div class="path-row">
+              <input id="file-path" type="text" spellcheck="false" aria-label="Markdown 文件路径" />
+              <button id="load-file" class="primary-button" type="button">读取文件 <svg aria-hidden="true" viewBox="0 0 20 20"><path d="M6 14 14 6M7 6h7v7" /></svg></button>
             </div>
-            <div class="cache-actions">
-              <button id="generate-cache" class="cache-button" type="button" disabled>为当前材料生产默认缓存</button>
-              <button id="replace-cache" class="cache-button secondary hidden" type="button" disabled>按当前标签生产并替换现有缓存</button>
-            </div>
-            <div id="cache-progress-wrap" class="cache-progress-wrap hidden">
-              <progress id="cache-progress" max="100" value="0" aria-label="离线语音生成进度" aria-describedby="cache-progress-label"></progress>
-              <span id="cache-progress-label" aria-live="polite" aria-atomic="true"></span>
-            </div>
-            <label class="playback-mode" for="playback-mode"><span>播放方式</span>
-              <select id="playback-mode">
-                <option value="realtime">实时合成</option>
-                <option value="offline-first">离线优先，缺失时实时合成</option>
-              </select>
-            </label>
-            <p id="playback-mode-note" class="cache-note">缓存任务在后台逐句生成，可继续练习。离线语音使用生成时保存的音色；重新生成完成后才会替换旧缓存。</p>
-          </section>
+            <section id="audio-cache-panel" class="audio-cache-panel" aria-labelledby="audio-cache-title">
+              <div class="cache-heading">
+                <div><h3 id="audio-cache-title">离线语音</h3><p id="audio-cache-status" role="status" aria-live="polite" aria-atomic="true">读取材料后查看缓存状态</p></div>
+                <span id="cache-count" class="cache-count"></span>
+              </div>
+              <div class="cache-actions">
+                <button id="generate-cache" class="cache-button" type="button" disabled>为当前材料生产默认缓存</button>
+                <button id="replace-cache" class="cache-button secondary hidden" type="button" disabled>按当前标签生产并替换现有缓存</button>
+              </div>
+              <div id="cache-progress-wrap" class="cache-progress-wrap hidden">
+                <progress id="cache-progress" max="100" value="0" aria-label="离线语音生成进度" aria-describedby="cache-progress-label"></progress>
+                <span id="cache-progress-label" aria-live="polite" aria-atomic="true"></span>
+              </div>
+              <label class="playback-mode" for="playback-mode"><span>播放方式</span>
+                <select id="playback-mode">
+                  <option value="realtime">实时合成</option>
+                  <option value="offline-first">离线优先，缺失时实时合成</option>
+                </select>
+              </label>
+              <p id="playback-mode-note" class="cache-note">缓存任务在后台逐句生成，可继续练习。离线语音使用生成时保存的音色；重新生成完成后才会替换旧缓存。</p>
+            </section>
+          </details>
           <div id="page-error" class="error-box hidden" role="alert"></div>
         </section>
 
-        <section class="settings-card">
-          <div class="section-heading"><div><span class="step">02</span><h2>设置声音与语气</h2></div><button id="reset-settings" class="quiet-button" type="button">恢复默认</button></div>
+        <details id="voice-options" class="settings-card voice-options">
+          <summary class="section-heading voice-summary"><div><span class="step">02</span><h2>设置声音与语气</h2></div><svg aria-hidden="true" viewBox="0 0 20 20"><path d="m7 4 6 6-6 6" /></svg></summary>
+          <div class="settings-actions"><button id="reset-settings" class="quiet-button" type="button">恢复默认</button></div>
           <div class="settings-grid">
             <section class="tag-field voice-field" aria-labelledby="voice-tags-label">
               <div class="tag-heading"><h3 id="voice-tags-label">基础音色描述</h3><span>可多选</span></div>
@@ -83,7 +87,7 @@
             </section>
           </div>
           <p class="settings-note">点击标签即可组合音色和语气；每句朗读时会即时应用，选择会保存在本机浏览器。</p>
-        </section>
+        </details>
 
         <section id="practice-card" class="practice-card">
           <div class="section-heading practice-heading"><div><span class="step">03</span><h2>逐句练习</h2></div><span id="playback-status" class="playback-status" role="status" aria-live="polite">等待读取题目</span></div>
