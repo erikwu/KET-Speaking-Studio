@@ -44,6 +44,16 @@ let imageReady = false;
 let videoReady = false;
 let isBusy = false;
 let activeMode = "image";
+let videoFps = 16;
+let imageModel = { name: "", path: "" };
+let videoModel = { name: "", path: "" };
+
+function updateModelBadge() {
+  const model = activeMode === "video" ? videoModel : imageModel;
+  if (!model.name) return;
+  $("#model-name").textContent = model.name;
+  $("#model-name").title = model.path;
+}
 
 function setState(label, state = "idle") {
   const chip = $("#result-state");
@@ -84,6 +94,7 @@ function switchMode(mode) {
   $("#video-mode-button").classList.toggle("is-active", isVideo);
   $("#image-mode-button").setAttribute("aria-pressed", String(!isVideo));
   $("#video-mode-button").setAttribute("aria-pressed", String(isVideo));
+  updateModelBadge();
   $("#studio-kicker").classList.toggle("hidden", isVideo);
   $("#studio-kicker").textContent = "MLX · QWEN IMAGE 2.1";
   $("#studio-title").textContent = isVideo ? "让静态画面动起来" : "把想法变成图像";
@@ -96,9 +107,9 @@ async function loadConfig() {
   const response = await fetch("/api/config");
   /** @type {AppConfig} */
   const config = await response.json();
-  const name = $("#model-name");
-  name.textContent = config.modelName;
-  name.title = config.modelPath;
+  imageModel = { name: config.modelName, path: config.modelPath };
+  videoModel = { name: config.video.modelName, path: config.video.modelPath };
+  updateModelBadge();
   imageReady = config.modelReady && config.cliReady;
   if (!config.modelReady || !config.cliReady) {
     setError(!config.modelReady ? `模型目录不完整：${config.modelPath}` : "找不到本地 mflux 命令。请确认项目 .venv 已安装 mflux。");
@@ -109,6 +120,8 @@ async function loadConfig() {
     setError("");
   }
   const defaults = config.video.defaults;
+  videoFps = defaults.fps;
+  $("#video-output-fps").textContent = `${defaults.fps} fps`;
   $("#video-width").value = String(defaults.width);
   $("#video-height").value = String(defaults.height);
   $("#video-frames").replaceChildren(...defaults.frameOptions.map((frames) => {
@@ -247,8 +260,8 @@ function validateVideoForm() {
   const width = Number($("#video-width").value);
   const height = Number($("#video-height").value);
   for (const [label, value] of [["宽度", width], ["高度", height]]) {
-    if (!Number.isInteger(value) || value < 256 || value > 4096 || value % 32 !== 0) {
-      throw new Error(`${label}需为 256 到 4096 之间、且能被 32 整除的整数。`);
+    if (!Number.isInteger(value) || value < 256 || value > 4096 || value % 16 !== 0) {
+      throw new Error(`${label}需为 256 到 4096 之间、且能被 16 整除的整数。`);
     }
   }
   const numFrames = Number($("#video-frames").value);
@@ -350,7 +363,7 @@ async function followJob(jobId) {
         $("#download-button").href = job.videoDownloadUrl;
         $("#download-label").textContent = "下载视频";
         $("#download-button").setAttribute("aria-label", "下载生成的 MP4 视频");
-        $("#result-details").textContent = `Seed ${job.seed} · ${$("#video-width").value} × ${$("#video-height").value} · ${$("#video-frames").value} 帧 · 24 fps`;
+        $("#result-details").textContent = `Seed ${job.seed} · ${$("#video-width").value} × ${$("#video-height").value} · ${$("#video-frames").value} 帧 · ${videoFps} fps`;
       } else {
         resultVideo.pause();
         resultVideo.removeAttribute("src");

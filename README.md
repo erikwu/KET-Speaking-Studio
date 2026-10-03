@@ -16,7 +16,7 @@
 
 ### 视觉生成工作室 · 8787
 
-打开 <http://127.0.0.1:8787>。页面包含“图像”和“图生视频”两种模式：图像模式由 Qwen Image 2.1 生成图片，保留参考图、尺寸、步数、Seed 和输出格式等选项；图生视频模式由 Wan 2.2 TI2V-5B 根据一张起始图和提示词生成 MP4。视频长度可选 41、81 或 121 帧，输出为 24 fps。生成结果可在页面预览和下载，提示词、输入图片及输出保存在 `outputs/web-ui/<任务编号>/`。
+打开 <http://127.0.0.1:8787>。页面包含“图像”和“图生视频”两种模式：图像模式由 Qwen Image 2.1 生成图片，保留参考图、尺寸、步数、Seed 和输出格式等选项；图生视频模式由 Wan 2.2 I2V A14B Q8 根据一张起始图和提示词生成 MP4。视频长度可选 41、81 或 121 帧，输出为 16 fps。生成结果可在页面预览和下载，提示词、输入图片及输出保存在 `outputs/web-ui/<任务编号>/`。
 
 ## 首次安装
 
@@ -53,7 +53,7 @@ npm start
 - 8788 使用 `models/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16` 生成语音，并使用 Qwen Image 模型生成 Part 2 情景图。
 - 模拟考使用 [`mlx-community/whisper-large-v3-turbo`](https://huggingface.co/mlx-community/whisper-large-v3-turbo) 在本机转写英文，并使用 [`mlx-community/Qwen3-4B-4bit`](https://huggingface.co/mlx-community/Qwen3-4B-4bit) 在本机评分；两者约增加 3.9 GB 权重。Whisper 模型按 MIT 许可发布，Qwen3 按 Apache-2.0 许可发布；请以模型仓库随附的许可文件为准。
 - 8787 使用 Qwen Image 2.1 MLX 4-bit 模型生成图片；默认优先使用 `models/Qwen-Image-2.1-MLX-4bit-Heretic`，否则使用 `models/Qwen-Image-2.1-MLX-4bit`。
-- 8787 的图生视频模式使用 `models/Wan2.2-TI2V-5B-MLX-Q8` 和隔离环境 `.venv-wan22-mlx/bin/python`。两种模式共用任务状态和单任务锁，避免同时占用统一内存；缺少 Wan 文件时图像模式仍可独立使用。
+- 8787 的图生视频模式使用 `models/Wan2.2-I2V-A14B-MLX-Q8` 和隔离环境 `.venv-wan22-mlx/bin/python`。A14B Q8 权重约 42.7 GB；原有 `models/Wan2.2-TI2V-5B-MLX-Q8` 目录保留，不会由工作室删除。两种模式共用任务状态和单任务锁，避免同时占用统一内存；缺少 Wan 文件时图像模式仍可独立使用。
 - 模型文件、语音缓存、输入材料和生成图片不纳入 Git 提交。模型的许可说明见 [`speech/README.md`](speech/README.md)。
 - 视觉生成工作室的功能与参数说明见 [`web/README.md`](web/README.md)。
 - 8787 分别检查 Qwen 图片模型/mflux 和 Wan 模型/运行环境；任一模式未就绪只会禁用对应模式，不影响另一模式，也不影响 8788 对已导入语音和图片的离线使用。

@@ -65,11 +65,17 @@ const PYTHON_CLI = process.env.MFLUX_CLI_PATH
   : path.join(ROOT_DIR, ".venv", "bin", "mflux-generate-qwen-2.1");
 const baseModel = path.join(ROOT_DIR, "models", "Qwen-Image-2.1-MLX-4bit");
 const hereticModel = path.join(ROOT_DIR, "models", "Qwen-Image-2.1-MLX-4bit-Heretic");
-const wanModel = path.join(ROOT_DIR, "models", "Wan2.2-TI2V-5B-MLX-Q8");
+const wanModel = path.join(ROOT_DIR, "models", "Wan2.2-I2V-A14B-MLX-Q8");
 const wanPython = path.join(ROOT_DIR, ".venv-wan22-mlx", "bin", "python");
 
 function isWanModelDirectory(candidate: string): boolean {
-  return ["config.json", "model.safetensors", "t5_encoder.safetensors", "vae.safetensors"]
+  return [
+    "config.json",
+    "high_noise_model.safetensors",
+    "low_noise_model.safetensors",
+    "t5_encoder.safetensors",
+    "vae.safetensors",
+  ]
     .every((file) => existsSync(path.join(candidate, file)));
 }
 
@@ -208,8 +214,8 @@ function validateVideoInput(value: unknown): VideoGenerateInput {
     throw new Error("步数需在 1 到 100 之间。");
   }
   for (const [label, dimension] of [["宽度", input.width], ["高度", input.height]] as const) {
-    if (!Number.isInteger(dimension) || dimension < 256 || dimension > 4096 || dimension % 32 !== 0) {
-      throw new Error(`${label}需为 256 到 4096 之间、且能被 32 整除的整数。`);
+    if (!Number.isInteger(dimension) || dimension < 256 || dimension > 4096 || dimension % 16 !== 0) {
+      throw new Error(`${label}需为 256 到 4096 之间、且能被 16 整除的整数。`);
     }
   }
   if (![41, 81, 121].includes(input.numFrames)) throw new Error("帧数只能选择 41、81 或 121 帧。");
@@ -384,7 +390,8 @@ async function launchVideoJob(input: VideoGenerateInput): Promise<Job> {
     "--height", String(input.height),
     "--num-frames", String(input.numFrames),
     "--steps", String(input.steps),
-    "--guide-scale", String(input.guideScale),
+    "--guide-scale", `${input.guideScale},${input.guideScale}`,
+    "--tiling", "aggressive",
     "--seed", String(seed),
     "--output-path", outputPath,
   ];
@@ -548,9 +555,9 @@ const server = createServer(async (req, res) => {
           height: 704,
           frameOptions: [41, 81, 121],
           numFrames: 41,
-          steps: 20,
-          guideScale: 5.0,
-          fps: 24,
+          steps: 40,
+          guideScale: 3.5,
+          fps: 16,
         },
       },
     });

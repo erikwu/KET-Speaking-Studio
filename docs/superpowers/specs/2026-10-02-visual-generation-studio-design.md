@@ -2,15 +2,17 @@
 
 ## Goal
 
-Combine the existing local Qwen image workflow and the installed Wan 2.2 TI2V-5B image-to-video workflow in the current 8787 web app, and rename that app to “视觉生成工作室”. The existing 8787 launch command and loopback-only access remain in place.
+Combine the existing local Qwen image workflow and the Wan 2.2 I2V A14B MLX Q8 image-to-video workflow in the current 8787 web app, and rename that app to “视觉生成工作室”. The existing 8787 launch command and loopback-only access remain in place.
 
 ## User-approved behavior
 
 - The studio has two modes: “图像” and “图生视频”. It opens in image mode so current image-generation behavior remains familiar.
 - Image mode retains the existing Qwen Image 2.1 controls and output behavior.
 - Video mode requires one PNG, JPEG, or WebP input image and a prompt. It exposes width, height, frame count, inference steps, guidance scale, optional seed, and an optional negative prompt.
-- Frame count is a dropdown with 41, 81, and 121 frames; 41 is selected by default. Output frame rate is fixed at 24 fps.
-- Video defaults are 1280×704, 20 steps, and guidance scale 5.0. Video width and height must be divisible by 32; frame count must be 4n+1.
+- Frame count is a dropdown with 41, 81, and 121 frames; 41 is selected by default. Output frame rate is fixed at 16 fps.
+- Video defaults are 1280×704, 40 steps, and guidance scale 3.5 applied equally to both noise experts. Video width and height must be divisible by 16; frame count must be 4n+1.
+- Use aggressive VAE tiling for lower decode memory peaks. The A14B Q8 weights are about 42.7 GB; the model card warns that 64 GB unified-memory Macs may swap heavily.
+- The prior `models/Wan2.2-TI2V-5B-MLX-Q8` directory remains intact. The studio now reads its active video model from `models/Wan2.2-I2V-A14B-MLX-Q8`.
 - A completed video appears in a native video player with playback controls and an MP4 download action.
 - The product title, visible brand, startup message, and usage docs use “视觉生成工作室”. The service remains at `http://127.0.0.1:8787` and starts with `npm start`.
 - The same Node server and shared job lifecycle handle both modes. Only one image or video job may run at a time because both models use unified memory.
@@ -20,7 +22,7 @@ Combine the existing local Qwen image workflow and the installed Wan 2.2 TI2V-5B
 
 `web/server.ts` serves the current static page, validates JSON/base64 reference images, launches `mflux-generate-qwen-2.1`, tracks a single active job, exposes progress and cancellation, and serves completed images. `web/app.ts` owns the image form, polling, and image result display. `web/index.html` and `web/styles.css` define the current responsive Image Studio UI.
 
-The installed Wan model is `models/Wan2.2-TI2V-5B-MLX-Q8`. The isolated runner is `.venv-wan22-mlx/bin/python`; it runs `-m mlx_video.models.wan_2.generate` with `--model-dir`, `--image`, `--prompt`, dimensions, frames, steps, guidance, seed, and output path. The model outputs MP4 at 24 fps. Its CLI and Metal GPU availability have been verified on this Mac.
+The retained Wan model is `models/Wan2.2-TI2V-5B-MLX-Q8`. The active model is `Anes1032/Wan2.2-I2V-A14B-mlx-q8`, stored at `models/Wan2.2-I2V-A14B-MLX-Q8`; it uses separate high- and low-noise expert weights. The isolated runner is `.venv-wan22-mlx/bin/python`; it runs `-m mlx_video.models.wan_2.generate` with `--model-dir`, `--image`, `--prompt`, dimensions, frames, steps, paired guidance, aggressive tiling, seed, and output path. This model outputs MP4 at 16 fps. The model weights are downloaded separately from Hugging Face; inference was not run during this design update.
 
 ## Approaches
 
@@ -32,7 +34,7 @@ The installed Wan model is `models/Wan2.2-TI2V-5B-MLX-Q8`. The isolated runner i
 1. The header and page title identify the app as “视觉生成工作室”; the existing model badge and local-only indication remain.
 2. A mode switch selects “图像” or “图生视频”. The image mode preserves the existing Qwen workflow.
 3. Video mode shows a single-image upload area with preview, filename, remove action, and the existing 24 MB local-upload limit. It shows the prompt field and an advanced-parameters section.
-4. Video parameters include width and height (default 1280×704), frame count (41/81/121, default 41), steps (default 20), guidance scale (default 5.0), optional seed, and optional negative prompt. Output fps is shown as fixed at 24.
+4. Video parameters include width and height (default 1280×704), frame count (41/81/121, default 41), steps (default 40), one guidance value (default 3.5, applied to both experts), optional seed, and optional negative prompt. Output fps is shown as fixed at 16.
 5. Submitting starts a shared background job. The canvas shows load/sampling progress, supports cancellation, then displays the resulting MP4 in a native `<video controls>` element and offers download.
 6. If the Wan files or isolated Python runner are unavailable, video mode shows the specific readiness issue and disables generation. Existing image readiness is independent.
 7. Layout remains usable on narrow screens; mode controls and labels remain keyboard accessible.
@@ -41,7 +43,7 @@ The installed Wan model is `models/Wan2.2-TI2V-5B-MLX-Q8`. The isolated runner i
 
 - Extend `/api/config` with independent image and video readiness details. Video readiness checks the Wan model files and `.venv-wan22-mlx/bin/python`.
 - Keep `POST /api/generate` for image jobs and add `POST /api/video/generate`. Both submit to the same global active-job lock and shared job registry; reject an overlapping job with HTTP 409.
-- Video requests use the existing bounded JSON upload pattern. Validate prompt length, image MIME/content and size, dimensions divisible by 32, an allowed 4n+1 frame count, steps, guidance, and optional integer seed. Derive all output paths server-side.
+- Video requests use the existing bounded JSON upload pattern. Validate prompt length, image MIME/content and size, dimensions divisible by 16, an allowed 4n+1 frame count, steps, guidance, and optional integer seed. Derive all output paths server-side.
 - Save the input image and prompt in the server-created job folder, then spawn the isolated Wan runner with argument arrays (no shell interpolation). Use the model path in the project and write `result.mp4` into that job folder.
 - Keep common status and cancel routes. Add a video output route that serves `video/mp4` inline or as an attachment. Image result routes and content types remain unchanged.
 - Parse progress from the Wan process output into the shared job progress field. On process failure, return a concise error plus a bounded log tail; on cancellation, mark the job cancelled and release the active-job lock.
@@ -58,7 +60,7 @@ The installed Wan model is `models/Wan2.2-TI2V-5B-MLX-Q8`. The isolated runner i
 ## Out of scope
 
 - Changing the 8788 speaking practice service or the existing Qwen generation semantics.
-- Pure text-to-video, Wan 2.2 A14B, LoRA selection, configurable fps, video history management, batch/queued generation, or concurrent model inference.
+- Pure text-to-video, A14B LoRA selection, configurable fps, video history management, batch/queued generation, or concurrent model inference.
 - Introducing a frontend framework, cloud services, or external model calls.
 - Running automated tests unless requested. Verification will use manual startup/API/UI checks and the verified Wan CLI entry point.
 
@@ -66,7 +68,7 @@ The installed Wan model is `models/Wan2.2-TI2V-5B-MLX-Q8`. The isolated runner i
 
 - The 8787 page and startup documentation identify the app as “视觉生成工作室”.
 - Users can switch between the existing Qwen image workflow and a Wan image-to-video workflow in one page.
-- Video mode accepts an image and prompt, offers all approved settings, defaults to 41 frames / 20 steps / 1280×704 / guidance 5.0, and enforces the model's dimensions and frame constraints.
+- Video mode accepts an image and prompt, offers all approved settings, defaults to 41 frames / 40 steps / 1280×704 / guidance 3.5 applied to both experts / 16 fps, and enforces the model's dimensions and frame constraints.
 - Video readiness is reported independently from image readiness.
 - Image and video jobs share progress, cancellation, and a single active-job lock.
 - A completed MP4 can be previewed and downloaded from the result panel.

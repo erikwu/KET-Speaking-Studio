@@ -131,15 +131,15 @@
               </section>
 
               <details class="advanced-section" open>
-                <summary><span>视频参数</span><span class="summary-note">Wan 2.2 TI2V · 本机 MLX</span></summary>
+                <summary><span>视频参数</span><span class="summary-note">Wan 2.2 I2V A14B · 本机 MLX</span></summary>
                 <div class="parameter-grid">
-                  <label class="parameter-field"><span>宽度 <span class="param-hint">32 的倍数</span></span><input id="video-width" type="number" min="256" max="4096" step="32" value="1280" /></label>
-                  <label class="parameter-field"><span>高度 <span class="param-hint">32 的倍数</span></span><input id="video-height" type="number" min="256" max="4096" step="32" value="704" /></label>
-                  <label class="parameter-field"><span>视频长度</span><select id="video-frames"><option value="41" selected>41 帧 · 约 1.7 秒</option><option value="81">81 帧 · 约 3.4 秒</option><option value="121">121 帧 · 约 5 秒</option></select></label>
-                  <label class="parameter-field"><span>步数 <span class="param-hint">越高越慢</span></span><input id="video-steps" type="number" min="1" max="100" step="1" value="20" /></label>
-                  <label class="parameter-field"><span>Guidance scale</span><input id="video-guidance" type="number" min="0" max="20" step="0.1" value="5" /></label>
+                  <label class="parameter-field"><span>宽度 <span class="param-hint">16 的倍数</span></span><input id="video-width" type="number" min="256" max="4096" step="16" value="1280" /></label>
+                  <label class="parameter-field"><span>高度 <span class="param-hint">16 的倍数</span></span><input id="video-height" type="number" min="256" max="4096" step="16" value="704" /></label>
+                  <label class="parameter-field"><span>视频长度</span><select id="video-frames"><option value="41" selected>41 帧 · 约 2.6 秒</option><option value="81">81 帧 · 约 5.1 秒</option><option value="121">121 帧 · 约 7.6 秒</option></select></label>
+                  <label class="parameter-field"><span>步数 <span class="param-hint">越高越慢</span></span><input id="video-steps" type="number" min="1" max="100" step="1" value="40" /></label>
+                  <label class="parameter-field"><span>Guidance scale <span class="param-hint">同时应用于高/低噪声专家</span></span><input id="video-guidance" type="number" min="0" max="20" step="0.1" value="3.5" /></label>
                   <label class="parameter-field"><span>Seed <span class="param-hint">留空随机</span></span><input id="video-seed" type="number" min="0" max="4294967295" step="1" placeholder="随机" /></label>
-                  <label class="parameter-field parameter-wide"><span>输出帧率</span><div class="fixed-value">24 fps <span>模型固定</span></div></label>
+                  <label class="parameter-field parameter-wide"><span>输出帧率</span><div class="fixed-value"><span id="video-output-fps">16 fps</span> <span>模型固定</span></div></label>
                 </div>
                 <label class="field-label negative-label" for="video-negative-prompt">负面提示词 <span class="optional">可选</span></label>
                 <textarea id="video-negative-prompt" name="negativePrompt" rows="2" maxlength="5000" placeholder="想避免出现的内容…留空时使用模型默认值"></textarea>
@@ -182,7 +182,7 @@
           <div class="canvas-caption"><span><i></i> LOCAL MLX RENDER</span><span>输出自动保存到 <code>outputs/web-ui/</code></span></div>
         </section>
       </main>
-      <footer class="app-footer"><span>Qwen Image 2.1 · mflux / Wan 2.2 TI2V-5B · MLX</span><span>模型推理仅运行于本地 Apple Silicon</span></footer>
+      <footer class="app-footer"><span>Qwen Image 2.1 · mflux / Wan 2.2 I2V A14B Q8 · MLX</span><span>模型推理仅运行于本地 Apple Silicon</span></footer>
     </div>
   </body>
 </html>

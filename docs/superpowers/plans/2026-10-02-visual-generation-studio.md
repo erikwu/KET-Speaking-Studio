@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add Wan 2.2 TI2V-5B image-to-video generation to the existing 8787 Qwen Image Studio and rename the unified app to “视觉生成工作室”.
+**Goal:** Add Wan 2.2 I2V A14B MLX Q8 image-to-video generation to the existing 8787 Qwen Image Studio and rename the unified app to “视觉生成工作室”.
 
 **Architecture:** Keep one vanilla browser UI and one loopback-only Node server. Add a video-specific API route and Wan runner while reusing the existing job registry, progress polling, cancellation, and single-active-job lock. Keep the image API and Qwen execution path intact.
 
@@ -14,10 +14,11 @@
 
 - The service listens only on `127.0.0.1` and remains on port 8787, started with `npm start`.
 - Image and video inference share one active-job lock; do not run both models concurrently.
-- Video uses `models/Wan2.2-TI2V-5B-MLX-Q8` and `.venv-wan22-mlx/bin/python`.
+- Video uses `models/Wan2.2-I2V-A14B-MLX-Q8` and `.venv-wan22-mlx/bin/python`; retain the existing `models/Wan2.2-TI2V-5B-MLX-Q8` directory untouched.
 - Video input supports one PNG, JPEG, or WebP image up to 24 MB, plus a required prompt.
-- Video defaults are 1280×704, 41 frames, 20 steps, guidance scale 5.0, and fixed 24 fps; frame options are 41, 81, and 121.
-- Video width and height are multiples of 32; the frame count is 4n+1.
+- Video defaults are 1280×704, 41 frames, 40 steps, guidance scale 3.5 applied to both experts, and fixed 16 fps; frame options are 41, 81, and 121.
+- Video width and height are multiples of 16; the frame count is 4n+1.
+- Use aggressive VAE tiling; the A14B Q8 weights occupy about 42.7 GB and may swap heavily on 64 GB unified memory.
 - Video prompt and output remain local under `outputs/web-ui/<job-id>/`.
 - Preserve existing Qwen Image 2.1 controls, output formats, and `POST /api/generate` behavior.
 - Do not add or run automated tests unless requested; use the manual verification steps below.
@@ -32,7 +33,7 @@
 
 ## Review Focus
 
-- Missing Wan weights or runner must disable video independently while leaving a ready image mode usable. (Task 1, Step 2; Task 2, Step 3.)
+- Missing either A14B expert weight, other required Wan files, or runner must disable video independently while leaving a ready image mode usable. (Task 1, Step 2; Task 2, Step 3.)
 - A spoofed MIME type, unsupported image signature, or image over 24 MB must be rejected before saving or spawning. (Task 1, Step 3; Task 2, Step 4.)
 - Invalid dimensions, frame count, prompt, steps, guidance, or seed must receive a clear validation error. (Task 1, Step 3; Task 2, Step 5.)
 - A second request during either image or video inference must receive HTTP 409 and must not start another process. (Task 1, Step 5; Task 5, Step 2.)
@@ -51,13 +52,13 @@
 - Produces: `POST /api/video/generate` accepts `{ prompt: string, negativePrompt?: string, image: ReferenceImageInput, seed?: number | null, steps: number, width: number, height: number, numFrames: 41 | 81 | 121, guideScale: number }` and returns the common public job shape with `mediaType: "video"`, `videoUrl`, and `videoDownloadUrl` when complete. Image jobs publish `mediaType: "image"` and keep their current image URL fields.
 - Produces: `GET /api/jobs/:id/video` serves the completed MP4 inline; `?download=1` serves it as an attachment. Existing `/image` and `/cancel` routes remain compatible.
 
-- [ ] **Step 1: Add video model and runner constants** in `web/server.ts`: resolve the model directory to `models/Wan2.2-TI2V-5B-MLX-Q8` and the runner to `.venv-wan22-mlx/bin/python`; readiness requires `config.json`, `model.safetensors`, `t5_encoder.safetensors`, `vae.safetensors`, and the Python executable.
+- [ ] **Step 1: Add video model and runner constants** in `web/server.ts`: resolve the model directory to `models/Wan2.2-I2V-A14B-MLX-Q8` and the runner to `.venv-wan22-mlx/bin/python`; readiness requires `config.json`, both `high_noise_model.safetensors` and `low_noise_model.safetensors`, `t5_encoder.safetensors`, `vae.safetensors`, and the Python executable. Keep the old 5B model directory untouched.
 - [ ] **Step 2: Extend `/api/config` without changing the image response fields.** Add the video readiness and exact approved defaults. Confirm the image readiness calculation remains independent.
-- [ ] **Step 3: Define and validate `VideoGenerateInput`.** Require a non-empty prompt up to 10,000 characters; optional negative prompt up to 5,000; one supported image with matching PNG/JPEG/WebP signature and at most 24 MB; dimensions from 256 to 4096 divisible by 32; `numFrames` exactly 41, 81, or 121; steps 1–100; finite guidance scale from 0 to 20; and optional integer seed from 0 through 4,294,967,295. Use the existing JSON request-size limit.
-- [ ] **Step 4: Add `launchVideoJob(input)` and common child-process lifecycle handling.** Create a random job directory under `outputs/web-ui/`, save `prompt.txt` and the decoded input image, and set `result.mp4` as the expected output. Spawn `.venv-wan22-mlx/bin/python` with `-m mlx_video.models.wan_2.generate`, `--model-dir`, `--image`, `--prompt`, `--width`, `--height`, `--num-frames`, `--steps`, `--guide-scale`, `--seed`, and `--output-path` arguments (never shell-interpolate). Append a non-empty `--negative-prompt` pair only when supplied so the model's configured default remains active otherwise. Generate a 32-bit unsigned random seed when input is blank and expose it in status. Reuse an idempotent finalizer from child `error` and `close` events: clear the shared active-job lock once, mark cancellation, require exit code 0 plus an existing output before completion, and report a bounded log tail on failure. Parse Wan's `tqdm` `current/total` progress from stdout/stderr into the shared progress field.
+- [ ] **Step 3: Define and validate `VideoGenerateInput`.** Require a non-empty prompt up to 10,000 characters; optional negative prompt up to 5,000; one supported image with matching PNG/JPEG/WebP signature and at most 24 MB; dimensions from 256 to 4096 divisible by 16; `numFrames` exactly 41, 81, or 121; steps 1–100; finite guidance scale from 0 to 20; and optional integer seed from 0 through 4,294,967,295. Use the existing JSON request-size limit.
+- [ ] **Step 4: Add `launchVideoJob(input)` and common child-process lifecycle handling.** Create a random job directory under `outputs/web-ui/`, save `prompt.txt` and the decoded input image, and set `result.mp4` as the expected output. Spawn `.venv-wan22-mlx/bin/python` with `-m mlx_video.models.wan_2.generate`, `--model-dir`, `--image`, `--prompt`, `--width`, `--height`, `--num-frames`, `--steps`, `--guide-scale <value>,<value>`, `--tiling aggressive`, `--seed`, and `--output-path` arguments (never shell-interpolate). Append a non-empty `--negative-prompt` pair only when supplied so the model's configured default remains active otherwise. Generate a 32-bit unsigned random seed when input is blank and expose it in status. Reuse an idempotent finalizer from child `error` and `close` events: clear the shared active-job lock once, mark cancellation, require exit code 0 plus an existing output before completion, and report a bounded log tail on failure. Parse Wan's `tqdm` `current/total` progress from stdout/stderr into the shared progress field.
 - [ ] **Step 5: Route video submissions through the shared lock and job registry.** Add `POST /api/video/generate`, reserve `activeJobId` during request validation as the image route does, return 503 for missing model/runner, 409 for an occupied slot, 202 with job state on success, and always release the preparing lock on validation or launch failure. Add `mediaType` to `Job` and `publicJob` without changing image payload fields.
 - [ ] **Step 6: Add MP4 output serving and shared result metadata.** Extend job routing with `/video`; serve `video/mp4` inline or with attachment disposition for `?download=1`, and support HTTP byte ranges with `206`, `Content-Range`, and `Accept-Ranges` so native playback seeking works. Return 409 until complete and 404 for a missing output. Keep existing image content types, route, and filenames unchanged.
-- [ ] **Step 7: Manually inspect readiness and validation through the local server.** Start the server on a temporary local port and inspect `/api/config`; confirm the reported video readiness matches the local model files and runner, and image fields retain their current shape. Submit malformed JSON, unsupported/mismatched image data, an image over 24 MB, invalid frame count, dimensions not divisible by 32, empty/oversized prompt, invalid steps, guidance, and seed; confirm clear 4xx errors and that rejected requests create no job folder and spawn no process. This is a manual check, not an automated test.
+- [ ] **Step 7: Manually inspect readiness and validation through the local server.** Start the server on a temporary local port and inspect `/api/config`; confirm the reported video readiness matches both A14B expert files, other required model files, and runner, and image fields retain their current shape. Submit malformed JSON, unsupported/mismatched image data, an image over 24 MB, invalid frame count, dimensions not divisible by 16, empty/oversized prompt, invalid steps, guidance, and seed; confirm clear 4xx errors and that rejected requests create no job folder and spawn no process. This is a manual check, not an automated test.
 - [ ] **Step 8: Commit the server task** with a message such as `feat: add local Wan video generation API`.
 
 ### Task 2: Add the mode switch and video-generation form
@@ -72,7 +73,7 @@
 - Produces: Accessible “图像” and “图生视频” mode controls; the selected panel is visible and the other hidden. Image mode remains selected on initial load.
 - Produces: `POST /api/video/generate` requests using the Task 1 payload and the existing browser FileReader upload pattern.
 
-- [ ] **Step 1: Add the mode navigation and video form markup** in `web/index.html`. Use two native mode buttons with `aria-pressed` state and labelled form panels, so keyboard users can switch modes without custom tab keyboard handling. Include one-image upload/preview/remove, required prompt, width, height, frame dropdown (41/81/121; select 41), steps (20), guidance scale (5.0), optional seed, optional negative prompt, and a fixed 24 fps note.
+- [ ] **Step 1: Add the mode navigation and video form markup** in `web/index.html`. Use two native mode buttons with `aria-pressed` state and labelled form panels, so keyboard users can switch modes without custom tab keyboard handling. Include one-image upload/preview/remove, required prompt, width, height, frame dropdown (41/81/121; select 41), steps (40), guidance scale (3.5 applied to both experts), optional seed, optional negative prompt, and a fixed 16 fps note.
 - [ ] **Step 2: Add responsive video-form styles** in `web/styles.css`, reusing existing field, upload, parameter-grid, and button tokens. Make the mode switch, upload state, and controls work at the existing mobile breakpoint.
 - [ ] **Step 3: Add mode state and readiness handling** in `web/app.ts`. Preserve the current image readiness flow; independently enable or disable video generation using `config.video.modelReady` and `config.video.cliReady`. Switching modes must not reset either form.
 - [ ] **Step 4: Implement video image selection** with PNG/JPEG/WebP MIME checks, 24 MB limit, drag/drop, local preview, and remove action. Reuse the existing object-URL cleanup pattern and report invalid files in the video form's alert region.
@@ -114,11 +115,33 @@
 
 - [ ] **Step 1: Replace the visible and browser-facing Qwen-only studio name** in `web/index.html` with “视觉生成工作室”; retain Qwen 2.1 as the image-mode model label.
 - [ ] **Step 2: Update the 8787 startup message** in `web/server.ts` and rename the package metadata in `package.json` to `visual-generation-studio`; preserve `start` and `start:tts` scripts.
-- [ ] **Step 3: Update root and web documentation** to describe the combined image/video modes, Wan model path and isolated runner, 41/81/121 frame selector, 24 fps output, local output directory, readiness behavior, and unchanged 8787 launch steps.
+- [ ] **Step 3: Update root and web documentation** to describe the combined image/video modes, Wan I2V A14B model path and isolated runner, 41/81/121 frame selector, 16 fps output, local output directory, readiness behavior, retained 5B model, and unchanged 8787 launch steps.
 - [ ] **Step 4: Review all user-facing app references** with a targeted text search; keep Qwen references where they describe the image model, and remove old app-name references from the 8787 product identity.
 - [ ] **Step 5: Commit the naming and documentation task** with a message such as `docs: rename local studio and document video mode`.
 
-### Task 5: Manual end-to-end review
+### Task 5: Switch the video model to Wan 2.2 I2V A14B MLX Q8
+
+**Files:**
+- Modify: `web/server.ts`
+- Modify: `web/app.ts`
+- Modify: `web/index.html`
+- Modify: `README.md`
+- Modify: `web/README.md`
+- Modify: `docs/superpowers/specs/2026-10-02-visual-generation-studio-design.md`
+- Modify: this plan
+
+**Interfaces:**
+- Consumes: The existing image-to-video form and Wan runner; the user-approved Hugging Face repository `Anes1032/Wan2.2-I2V-A14B-mlx-q8`.
+- Produces: The A14B Q8 model as the active video backend, model-specific readiness checks and defaults, and an untouched prior TI2V-5B model directory.
+
+- [ ] **Step 1: Download the A14B I2V Q8 weights** into `models/Wan2.2-I2V-A14B-MLX-Q8`; do not overwrite or delete the existing 5B directory.
+- [ ] **Step 2: Update backend readiness and launch arguments.** Check both noise experts, config, T5 encoder, and VAE. Pass the same UI guidance value to both experts and enable aggressive VAE tiling.
+- [ ] **Step 3: Update model-specific UI defaults and output details.** Use 40 steps, guidance 3.5, 16 fps, and 16-pixel dimension alignment. Keep the 41/81/121 frame selector and calculate its displayed duration from 16 fps.
+- [ ] **Step 4: Update the approved spec, plan, and usage docs** with the I2V A14B path, weight size and memory note, parameters, 16 fps, and retained 5B directory.
+- [ ] **Step 5: Manually verify `/api/config`, readiness, video defaults and launch metadata;** do not run actual inference if the local environment cannot expose Metal. Do not add or run automated tests.
+- [ ] **Step 6: Commit this model switch** with a message such as `feat: switch video studio to Wan I2V A14B Q8`.
+
+### Task 6: Manual end-to-end review
 
 **Files:**
 - No new files.
