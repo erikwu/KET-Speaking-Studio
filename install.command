@@ -6,6 +6,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$ROOT_DIR/.venv"
 PYTHON_BIN="$VENV_DIR/bin/python"
 INSTALL_PROFILE="full"
+CONFIG_READINESS="尚未收到服务配置"
 TTS_MODEL_DIR="$ROOT_DIR/models/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
 IMAGE_MODEL_DIR="$ROOT_DIR/models/Qwen-Image-2.1-MLX-4bit"
 ASR_MODEL_DIR="$ROOT_DIR/models/whisper-large-v3-turbo"
@@ -332,13 +333,34 @@ download_models() {
 }
 
 config_is_ready() {
-  "$NODE_BIN" -e 'let input="";process.stdin.setEncoding("utf8");process.stdin.on("data",chunk=>input+=chunk);process.stdin.on("end",()=>{try{const c=JSON.parse(input);const ready=process.argv[1]==="minimal"?c.examAvailable&&c.archiveToolsReady:c.modelReady&&c.runtimeReady&&c.illustrationReady&&c.examAvailable;process.exit(ready?0:1)}catch{process.exit(1)}})' "$INSTALL_PROFILE"
+  local config="$1" result
+  result="$(printf '%s' "$config" | KET_INSTALL_PROFILE="$INSTALL_PROFILE" "$NODE_BIN" -e '
+    let input = "";
+    process.stdin.setEncoding("utf8");
+    process.stdin.on("data", (chunk) => input += chunk);
+    process.stdin.on("end", () => {
+      try {
+        const config = JSON.parse(input);
+        const profile = process.env.KET_INSTALL_PROFILE === "minimal" ? "minimal" : "full";
+        const required = profile === "minimal"
+          ? ["examAvailable", "archiveToolsReady"]
+          : ["modelReady", "runtimeReady", "illustrationReady", "examAvailable"];
+        const checks = required.map((name) => `${name}=${config[name] === true}`);
+        const ready = required.every((name) => config[name] === true);
+        process.stdout.write(`${ready ? "READY" : "WAIT"} (${profile}: ${checks.join(", ")})`);
+      } catch {
+        process.stdout.write("WAIT (无法读取服务状态 JSON)");
+      }
+    });
+  ' 2>/dev/null || true)"
+  CONFIG_READINESS="${result:-无法读取服务状态}"
+  [[ "$result" == READY* ]]
 }
 
 open_existing_server() {
   local config
   config="$(curl -fsS --max-time 2 "$APP_URL/api/config" 2>/dev/null || true)"
-  if [[ -n "$config" ]] && printf '%s' "$config" | config_is_ready; then
+  if [[ -n "$config" ]] && config_is_ready "$config"; then
     say "本机练习服务已经运行，正在打开页面"
     open "$APP_URL"
     return 0
@@ -361,12 +383,17 @@ start_app() {
   server_pid=$!
   trap 'kill "$server_pid" >/dev/null 2>&1 || true' EXIT INT TERM
   ready=0
+  CONFIG_READINESS="尚未收到服务配置"
 
   for attempt in {1..60}; do
     config="$(curl -fsS --max-time 2 "$APP_URL/api/config" 2>/dev/null || true)"
-    if [[ -n "$config" ]] && printf '%s' "$config" | config_is_ready; then
-      ready=1
-      break
+    if [[ -n "$config" ]]; then
+      if config_is_ready "$config"; then
+        ready=1
+        break
+      fi
+    else
+      CONFIG_READINESS="8788 配置接口暂不可用"
     fi
     if ! kill -0 "$server_pid" >/dev/null 2>&1; then
       wait "$server_pid" || true
@@ -376,12 +403,21 @@ start_app() {
   done
 
   if [[ "$ready" -ne 1 ]]; then
-    fail "等待本地服务就绪超时；请查看上方错误信息。"
+    printf '最后一次就绪检查：%s\n' "$CONFIG_READINESS" >&2
+    fail "等待本地服务就绪超时；请查看上方检查状态。"
   fi
 
-  say "安装完成，正在打开练习页面"
+  say "安装完成"
+  printf '练习页面：%s\n' "$APP_URL"
+  if [[ "$INSTALL_PROFILE" == "minimal" ]]; then
+    printf '下一步：在页面导入已有的 .ketpack.zip 离线资源包。\n'
+  else
+    printf '下一步：在页面读取 Markdown 练习材料并开始练习。\n'
+  fi
+  printf '以后重新启动服务，在终端运行：\n  cd %q\n  npm run start:tts\n' "$ROOT_DIR"
+  printf '服务启动后访问：%s\n停止当前服务：在此终端按 Control-C。\n' "$APP_URL"
   open "$APP_URL"
-  printf '服务会保持运行。结束时在此终端按 Control-C。\n'
+  printf '服务正在运行；若浏览器未自动打开，请访问上方练习页面地址。\n'
   wait "$server_pid"
 }
 
@@ -406,7 +442,9 @@ main() {
   check_free_space
   download_models
 
-  printf '\n注意：Qwen Image 2.1 衍生模型采用 Qwen Research License；商业用途需另行取得许可。\n'
+  if [[ "$INSTALL_PROFILE" == "full" ]]; then
+    printf '\n注意：Qwen Image 2.1 衍生模型采用 Qwen Research License；商业用途需另行取得许可。\n'
+  fi
   start_app
 }
 
