@@ -194,11 +194,11 @@ footer .footer-about span:last-child { max-width: none; white-space: normal; }
 footer span:last-child { max-width: 48%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (min-width: 1080px) {
-  main { display: grid; grid-template-columns: minmax(320px, 390px) minmax(0, 1fr); align-items: start; gap: 0 24px; }
+  main { display: grid; grid-template-columns: minmax(320px, 390px) minmax(0, 1fr); grid-template-rows: auto max-content max-content minmax(0, 1fr); align-items: start; gap: 0 24px; }
   .intro { grid-column: 1 / -1; }
   .source-card { grid-column: 1; grid-row: 2; }
   .settings-card { grid-column: 1; grid-row: 3; }
-  .practice-card { grid-column: 2; grid-row: 2 / span 2; position: sticky; top: 16px; display: flex; flex-direction: column; max-height: calc(100vh - 32px); overflow: hidden; }
+  .practice-card { grid-column: 2; grid-row: 2 / span 3; position: sticky; top: 16px; display: flex; flex-direction: column; max-height: calc(100vh - 32px); overflow: hidden; }
   .practice-heading, .tabs { flex: 0 0 auto; }
   .practice-list { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: #b8c7b4 transparent; scrollbar-width: thin; }
 }
@@ -368,7 +368,7 @@ footer span:last-child { max-width: 48%; overflow: hidden; text-overflow: ellips
 .exam-summary-feedback-item.is-perfect-dimension .exam-summary-feedback-score { color: #745318; }
 .exam-summary-date { margin-top: 4px !important; }
 .exam-summary-actions { flex-wrap: wrap; }
-@media (min-width: 1080px) { .exam-card { grid-column: 1; } }
+@media (min-width: 1080px) { .exam-card { grid-column: 1; grid-row: 4; margin-top: 0; } }
 @media (max-width: 700px) {
   .exam-card { padding: 18px 17px; border-radius: 15px; }
   .exam-panel { padding: 13px; }
