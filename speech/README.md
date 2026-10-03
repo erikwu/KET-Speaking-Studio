@@ -14,6 +14,8 @@ TypeScript 本地网页读取 Markdown 中的 Part 1 / Phase 1、Part 1 / Phase 
 
 安装完成后，服务会在打开的终端窗口持续运行；按 Control-C 停止。再次双击 `install.command` 可复用已安装环境和模型，并启动页面。
 
+页面右上角提供「检查更新」：从项目 GitHub `main` 检查新版本，点击「更新并重启」后会保留模型和练习资源、备份代码并重启服务，成功后自动刷新页面。Git 和 ZIP 安装均可使用；本地代码修改或版本冲突会阻止覆盖。先结束模拟考并保存结果，更新期间无法开始新任务。自动重启要求通过 `install.command` 或 `npm run start:tts` 启动；失败恢复、依赖变更及 ZIP 校验说明见根目录 README 的「页面内更新」。
+
 考试模型分别为 [`mlx-community/whisper-large-v3-turbo`](https://huggingface.co/mlx-community/whisper-large-v3-turbo)（约 1.6 GB）和 [`mlx-community/Qwen3-4B-4bit`](https://huggingface.co/mlx-community/Qwen3-4B-4bit)（约 2.3 GB）。前者使用 MIT 许可，后者使用 Apache-2.0 许可；安装前请查看各 Hugging Face 仓库当前提供的模型卡和许可文件。安装器不替用户接受模型许可条款。
 
 图片模型 `JoyFusionAI/Qwen-Image-2.1-MLX-4bit` 是 Qwen Image 2.1 衍生模型，采用 Qwen Research License；商业用途需要另行取得许可。脚本只下载模型，不会替用户接受任何模型许可条款。

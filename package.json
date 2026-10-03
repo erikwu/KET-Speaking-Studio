@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "node --experimental-strip-types web/server.ts",
-    "start:tts": "node --experimental-strip-types speech/server.ts",
-    "test:resource-bundles": "node --experimental-strip-types --test speech/resource-bundle.test.ts speech/resource-bundle-api.test.ts speech/resource-bundle-store.test.ts speech/cache-action-state.test.ts speech/exam-session.test.ts speech/exam-models.test.ts speech/exam-api.test.ts speech/exam-audio.test.ts speech/exam-controller.test.ts speech/exam-inference.test.ts speech/worker-shutdown.test.ts web/server.test.ts"
+    "start:tts": "node --experimental-strip-types speech/launcher.ts",
+    "test:resource-bundles": "node --experimental-strip-types --test --test-timeout=60000 speech/resource-bundle.test.ts speech/resource-bundle-api.test.ts speech/resource-bundle-store.test.ts speech/cache-action-state.test.ts speech/exam-session.test.ts speech/exam-models.test.ts speech/exam-api.test.ts speech/exam-audio.test.ts speech/exam-controller.test.ts speech/exam-inference.test.ts speech/worker-shutdown.test.ts speech/app-update.test.ts speech/launcher.test.ts speech/update-api.test.ts speech/update-controls.test.ts web/server.test.ts"
   }
 }

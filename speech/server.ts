@@ -13,6 +13,7 @@ import { promoteResourceBundleFiles } from "./resource-bundle-store.ts";
 import { checkExamModels, type ExamModelState } from "./exam-models.ts";
 import { createExamInference, isExamDiagnosticCode, validateExamWav } from "./exam-inference.ts";
 import { stopWorkerProcess } from "./worker-shutdown.ts";
+import { createUpdateApi, createUpdateRpc } from "./update-api.ts";
 
 type SectionId = "phase1" | "phase2" | "part2";
 type VoiceRole = "question" | "answer";
@@ -1133,9 +1134,29 @@ async function serveFile(res: ServerResponse, filePath: string, contentType: str
   }
 }
 
+const port = Number(process.env.TTS_PORT ?? 8788);
+if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("TTS_PORT 需为 1 到 65535 的整数。");
+let activeRequests = 0;
+const updateApi = createUpdateApi({
+  port,
+  rpc: createUpdateRpc(),
+  busy: () => Boolean(activeRequests || activeSpeechId || dispatchingSpeech || pending.size || activeIllustrationJob || activeAudioCacheJob || activeResourceBundleOperation),
+});
+updateApi.setMaintenance(process.env.KET_UPDATE_MAINTENANCE === "1");
+process.on("message", (message: any) => {
+  if (message?.type === "ket-update-state") updateApi.setMaintenance(["updating", "restarting", "recovering"].includes(message.state?.phase));
+});
 const server = createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
   const route = url.pathname;
+  if (await updateApi.handle(req, res, route)) return;
+  if (updateApi.maintenance() && (req.method !== "GET" || route === "/api/resource-bundles/export")) {
+    json(res, 503, { error: "正在更新并重启，请稍后再试。" }); return;
+  }
+  if (req.method === "POST") {
+    activeRequests += 1;
+    res.once("close", () => { activeRequests -= 1; });
+  }
   if (req.method === "GET" && route === "/api/config") {
     const speechModelReady = await localModelReady();
     const speechRuntimeReady = runtimeReady();
@@ -1623,6 +1644,10 @@ const server = createServer(async (req, res) => {
     await serveFile(res, path.join(HERE, "exam-controller.ts"), "text/javascript; charset=utf-8");
     return;
   }
+  if (req.method === "GET" && route === "/update-controls.ts") {
+    await serveFile(res, path.join(HERE, "update-controls.ts"), "text/javascript; charset=utf-8");
+    return;
+  }
   if (req.method === "GET" && route === "/styles.css") {
     await serveFile(res, path.join(HERE, "styles.css"), "text/css; charset=utf-8");
     return;
@@ -1630,11 +1655,19 @@ const server = createServer(async (req, res) => {
   json(res, 404, { error: "页面或接口不存在。" });
 });
 
-const port = Number(process.env.TTS_PORT ?? 8788);
-if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("TTS_PORT 需为 1 到 65535 的整数。");
 server.listen(port, "127.0.0.1", () => {
   console.log(`Local KET Speech Practice is ready at http://127.0.0.1:${port}`);
   console.log(`Model: ${path.relative(ROOT, MODEL_DIR)}`);
+  if (process.env.KET_MANAGED_SERVER === "1" && process.send) {
+    void (async () => {
+      const exams = await getExamModelState();
+      process.send?.({ type: "ket-ready", capabilities: {
+        examAvailable: exams.examAvailable,
+        speechAvailable: await localModelReady() && runtimeReady(),
+        imageAvailable: isImageModelDirectory(IMAGE_MODEL_DIR) && existsSync(IMAGE_CLI),
+      } });
+    })().catch(error => { console.error("Startup readiness check failed", error); process.exitCode = 1; void shutdown(); });
+  }
 });
 
 async function shutdown(): Promise<void> {
@@ -1647,6 +1680,7 @@ async function shutdown(): Promise<void> {
   ]);
   await examInference?.dispose();
   await rm(EXAM_TEMP_DIR, { recursive: true, force: true });
+  if (process.connected) process.disconnect();
 }
 process.once("SIGINT", () => { void shutdown(); });
 process.once("SIGTERM", () => { void shutdown(); });

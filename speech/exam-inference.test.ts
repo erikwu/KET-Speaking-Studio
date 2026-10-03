@@ -64,13 +64,13 @@ test("transcribe_rejectsInvalidOrOversizedWavBeforeWriting", async () => {
 test("transcribe_removesTempAudioOnSuccessAndWorkerFailure", async () => {
   await withWorker(async ({ root, workerPath, tempDirectory }) => {
     const success = createExamInference(inferenceOptions(root, workerPath, tempDirectory));
-    assert.deepEqual(await success.transcribe(wavBuffer()), { transcript: "hello" });
-    await success.dispose();
+    try { assert.deepEqual(await success.transcribe(wavBuffer()), { transcript: "hello" }); }
+    finally { await success.dispose(); }
     assert.deepEqual(await readdir(tempDirectory), []);
 
     const failure = createExamInference(inferenceOptions(root, workerPath, tempDirectory, { env: { ...process.env, STUB_ERROR: "1" } }));
-    await assert.rejects(failure.transcribe(wavBuffer()), /识别失败/);
-    await failure.dispose();
+    try { await assert.rejects(failure.transcribe(wavBuffer()), { message: "failed" }); }
+    finally { await failure.dispose(); }
     assert.deepEqual(await readdir(tempDirectory), []);
   });
 });

@@ -57,7 +57,7 @@ test("installExamController_enablesRecordingOnlyAfterQuestionPlaybackSettles", a
   }
 
   const ids = [
-    "practice-card",
+    "practice-card", "exam-view-summary", "exam-score-sound", "exam-rerecord-score",
     "exam-start", "exam-availability", "exam-panel", "exam-summary", "exam-content", "exam-stage",
     "exam-progress", "exam-status", "exam-error", "exam-feedback", "exam-reference-toggle",
     "exam-reference", "exam-record", "exam-stop", "exam-continue", "exam-end", "exam-retry-score",
@@ -84,6 +84,7 @@ test("installExamController_enablesRecordingOnlyAfterQuestionPlaybackSettles", a
       { ...turn, id: "p3-a2", role: "A", voiceRole: "answer" },
     ] }] },
   ];
+  expandExamFixtures(sections);
 
   try {
     const { installExamController } = await import("./exam-controller.ts");
@@ -93,6 +94,7 @@ test("installExamController_enablesRecordingOnlyAfterQuestionPlaybackSettles", a
       speakText: () => playback,
     });
     elements.get("#exam-start").click();
+    await new Promise((resolve) => setImmediate(resolve));
     assert.equal(elements.get("#practice-card").classList.contains("hidden"), true);
     const recordButton = elements.get("#exam-record");
     assert.equal(recordButton.classList.contains("hidden"), false);
@@ -111,6 +113,8 @@ test("installExamController_enablesRecordingOnlyAfterQuestionPlaybackSettles", a
 });
 
 test("installExamController_ignoresStopFailureFromPreviousExam", async () => {
+  const previousWindow = globalThis.window;
+  globalThis.window = {};
   class FakeElement {
     constructor() {
       this.disabled = false; this.textContent = ""; this.dataset = {}; this.children = []; this.listeners = new Map(); this.attributes = new Map();
@@ -129,7 +133,7 @@ test("installExamController_ignoresStopFailureFromPreviousExam", async () => {
     querySelectorAll() { return []; }
     click() { if (!this.disabled) this.listeners.get("click")?.({ currentTarget: this }); }
   }
-  const ids = ["practice-card", "exam-start", "exam-availability", "exam-panel", "exam-summary", "exam-content", "exam-stage", "exam-progress", "exam-status", "exam-error", "exam-feedback", "exam-reference-toggle", "exam-reference", "exam-record", "exam-stop", "exam-continue", "exam-end", "exam-retry-score"];
+  const ids = ["practice-card", "exam-view-summary", "exam-score-sound", "exam-rerecord-score", "exam-start", "exam-availability", "exam-panel", "exam-summary", "exam-content", "exam-stage", "exam-progress", "exam-status", "exam-error", "exam-feedback", "exam-reference-toggle", "exam-reference", "exam-record", "exam-stop", "exam-continue", "exam-end", "exam-retry-score"];
   const elements = new Map(ids.map((id) => [`#${id}`, new FakeElement()]));
   const previousDocument = globalThis.document;
   globalThis.document = { querySelector: (selector) => elements.get(selector), createElement: () => new FakeElement() };
@@ -141,6 +145,7 @@ test("installExamController_ignoresStopFailureFromPreviousExam", async () => {
     { id: "phase2", title: "Phase 2", groups: [{ id: "p2", number: 1, context: "", turns: [{ ...turn, role: "Q", voiceRole: "question" }, { ...turn, id: "a2", role: "A", voiceRole: "answer" }] }] },
     { id: "part2", title: "Part 2", groups: [{ id: "p3", number: 1, context: "A shop", turns: [{ ...turn, role: "A", voiceRole: "answer" }, { ...turn, id: "b", role: "B", voiceRole: "answer" }, { ...turn, id: "a3", role: "A", voiceRole: "answer" }] }] },
   ];
+  expandExamFixtures(sections);
   try {
     const { installExamController } = await import("./exam-controller.ts");
     const controller = installExamController({
@@ -163,5 +168,16 @@ test("installExamController_ignoresStopFailureFromPreviousExam", async () => {
     controller.dispose();
   } finally {
     globalThis.document = previousDocument;
+    globalThis.window = previousWindow;
   }
 });
+
+function expandExamFixtures(sections) {
+  for (const section of sections) {
+    const group = section.groups[0];
+    section.groups = Array.from({ length: section.id === "part2" ? 3 : 8 }, (_, index) => ({
+      ...group, id: `${section.id}-${index}`, number: index + 1,
+      turns: group.turns.map((turn, turnIndex) => ({ ...turn, id: `${section.id}-${index}-${turnIndex}` })),
+    }));
+  }
+}

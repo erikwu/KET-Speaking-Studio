@@ -1,6 +1,7 @@
 // @ts-check
 import { getCacheActionState, resolvePlaybackMode } from "./cache-action-state.ts";
 import { installExamController, shouldContinueExamPlayback } from "./exam-controller.ts";
+import { installUpdateControls } from "./update-controls.ts";
 
 /** @typedef {{id:string,role:"Q"|"A"|"B",voiceRole:"question"|"answer",text:string,translation:string}} Turn */
 /** @typedef {{id:string,number:number,context:string,turns:Turn[]}} Group */
@@ -59,6 +60,7 @@ let activeSection = "phase1";
 let modelAvailable = false;
 let examAvailability = { available: false, reason: "正在检查本机考试能力…" };
 let examController = null;
+let updateControls = null;
 let playbackWaiter = null;
 let illustrationAvailable = false;
 let archiveToolsAvailable = false;
@@ -557,6 +559,7 @@ function applyParsedMaterial(data) {
   updateBundleControls(false);
   activeSection = sections[0]?.id ?? "phase1";
   pathInput.value = loadedFilePath;
+  localStorage.setItem("ket-speaking-last-material", loadedFilePath);
   const displayName = data.filePath.split(/[\\/]/).filter(Boolean).pop() ?? data.filePath;
   $("#file-name").textContent = displayName;
   $("#file-name").title = data.filePath;
@@ -807,6 +810,8 @@ $("#playback-mode").addEventListener("change", (event) => {
 });
 
 examController = installExamController({
+  beforeBeginExam: () => updateControls?.reserveExam() ?? Promise.resolve(),
+  onExamEnd: () => updateControls?.releaseExam(),
   getSections: () => sections,
   getExamAvailability: () => examAvailability,
   stopSpeech: () => invalidatePlayback(),
@@ -818,9 +823,10 @@ examController = installExamController({
     await speak(button, { waitForEnd: true });
   },
 });
+updateControls = installUpdateControls({ isExamActive: () => examController?.isActive() ?? false });
 window.addEventListener("pagehide", () => examController?.dispose(), { once: true });
 installSettings();
-pathInput.value = DEFAULT_PATH;
+pathInput.value = localStorage.getItem("ket-speaking-last-material") || DEFAULT_PATH;
 async function initialize() {
   await loadConfig();
   await loadFile();

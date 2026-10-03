@@ -12,8 +12,14 @@
     <div class="shell">
       <header class="topbar">
         <a class="brand" href="/" aria-label="KET Speaking 首页"><span class="brand-mark">K</span><span>KET Speaking <b>Studio</b></span></a>
-        <div class="local-badge"><i></i><span>本机朗读 · 音频不上传</span></div>
+        <div class="topbar-actions"><div class="local-badge"><i></i><span>本机朗读 · 音频不上传</span></div><button id="check-update" class="cache-button update-button" type="button" aria-controls="update-panel">检查更新</button></div>
       </header>
+      <section id="update-panel" class="update-panel" aria-label="应用更新" hidden>
+        <div class="update-heading"><p id="update-message" role="status" aria-live="polite">点击检查 GitHub 最新版本。</p><button id="close-update" class="quiet-button" type="button">收起</button></div>
+        <progress id="update-progress" aria-label="更新处理中" hidden></progress>
+        <p id="update-notes" class="update-notes" hidden></p>
+        <div class="update-actions"><button id="install-update" class="primary-button" type="button" hidden>更新并重启</button><p>更新会刷新页面，请先保存本次成绩。模型、练习包和设置会保留。</p></div>
+      </section>
 
       <main>
         <section class="intro">
@@ -116,7 +122,7 @@
           <dialog id="exam-summary" class="exam-summary hidden" aria-labelledby="exam-summary-title" aria-describedby="exam-summary-meta"></dialog>
         </section>
       </main>
-      <footer><span>本地模型生成 · 语音保存于项目 outputs/speech-practice</span><span id="model-name"></span></footer>
+      <footer><div class="footer-about"><span>作者：<a href="https://www.linkedin.com/in/erik-wu-pmp-csm-15226412/" target="_blank" rel="noopener noreferrer">Erik</a></span><span>本地模型生成 · 语音保存于项目 outputs/speech-practice</span></div><span id="model-name"></span></footer>
     </div>
     <audio id="audio-player" preload="none"></audio>
   </body>

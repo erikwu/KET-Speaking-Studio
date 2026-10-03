@@ -30,8 +30,8 @@ export function shouldContinueExamPlayback(isCurrent, waitForEnd) {
 const SECTION_NAMES = { phase1: "Part 1 · Phase 1", phase2: "Part 1 · Phase 2", part2: "Part 2" };
 const $ = (selector) => document.querySelector(selector);
 
-/** @param {{getSections:()=>Section[],getExamAvailability:()=>{available:boolean,reason:string},speakText:(turn:Turn)=>Promise<void>,stopSpeech?:()=>void,startRecording?:typeof startExamRecording}} options */
-export function installExamController({ getSections, getExamAvailability, speakText, stopSpeech = () => {}, startRecording = startExamRecording }) {
+/** @param {{getSections:()=>Section[],getExamAvailability:()=>{available:boolean,reason:string},speakText:(turn:Turn)=>Promise<void>,stopSpeech?:()=>void,startRecording?:typeof startExamRecording,beforeBeginExam?:()=>Promise<void>,onExamEnd?:()=>void}} options */
+export function installExamController({ getSections, getExamAvailability, speakText, stopSpeech = () => {}, startRecording = startExamRecording, beforeBeginExam = async () => {}, onExamEnd = () => {} }) {
   const startButton = /** @type {HTMLButtonElement} */ $("#exam-start");
   const practicePanel = /** @type {HTMLElement} */ $("#practice-card");
   const availabilityNode = /** @type {HTMLElement} */ $("#exam-availability");
@@ -284,7 +284,9 @@ export function installExamController({ getSections, getExamAvailability, speakT
     };
   }
 
-  function beginExam() {
+  let startingExam = false;
+  async function beginExam() {
+    if (startingExam) return;
     void cancelRecording();
     const sections = getSections();
     const nextPlan = buildExamPlan(sections);
@@ -300,6 +302,15 @@ export function installExamController({ getSections, getExamAvailability, speakT
       setError(message);
       return;
     }
+    startingExam = true;
+    startButton.disabled = true;
+    try {
+      await beforeBeginExam();
+      if (disposed || getSections() !== sections) { onExamEnd(); return; }
+    } catch (error) {
+      availabilityNode.textContent = error instanceof Error ? error.message : "暂时无法开始模拟考，请稍后重试。";
+      return;
+    } finally { startingExam = false; startButton.disabled = false; }
     plan = nextPlan;
     const skippedGroups = Object.entries(nextPlan.skippedCounts).filter(([, count]) => count > 0).map(([id, count]) => `${SECTION_NAMES[id]} ${count} 组`).join("；");
     if (skippedGroups) availabilityNode.textContent = `本次考试会跳过不完整题目：${skippedGroups}。`;
@@ -819,6 +830,7 @@ export function installExamController({ getSections, getExamAvailability, speakT
     stopSpeech();
     const summary = summarizeExam(plan.units, [...responseRecords.values()], hintCounts);
     activeExamId = "";
+    onExamEnd();
     currentResponseId = "";
     exitExamMode();
     sessionPanel.classList.add("hidden");
@@ -1004,11 +1016,13 @@ export function installExamController({ getSections, getExamAvailability, speakT
 
   renderAvailability();
   return {
+    isActive() { return Boolean(activeExamId || startingExam); },
     refreshAvailability() { renderAvailability(); },
     resetForMaterialChange() {
       void cancelRecording();
       if (summaryPanel.open) summaryPanel.close();
       activeExamId = "";
+      onExamEnd();
       plan = null;
       unitIndex = 0;
       sequenceIndex = 0;
@@ -1035,6 +1049,7 @@ export function installExamController({ getSections, getExamAvailability, speakT
       void cancelRecording();
       if (summaryPanel.open) summaryPanel.close();
       activeExamId = "";
+      onExamEnd();
       responseRecords.clear();
       practiceAttempts.clear();
       hintCounts = {};
