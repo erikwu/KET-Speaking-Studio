@@ -62,8 +62,11 @@ export function installExamController({ getSections, getExamAvailability, speakT
   let sequenceIndex = 0;
   let hintCounts = {};
   let responseRecords = new Map();
+  let practiceAttempts = new Map();
   let revealed = false;
   let recordingSession = null;
+  let recordingTarget = null;
+  let pendingScoreTarget = null;
   let currentResponseId = "";
   let currentQuestion = "";
   let currentReference = "";
@@ -138,18 +141,33 @@ export function installExamController({ getSections, getExamAvailability, speakT
     else void context.resume().then(playNotes).catch(() => {});
   }
 
-  function restoreAnswerActions(record) {
+  function restoreAnswerActions(responseId = currentResponseId, attemptId = null) {
     stopButton.classList.add("hidden");
-    if (record?.transcript && record.status === "unscored") {
+    const record = responseRecords.get(responseId);
+    if (record?.status === "scored") {
       recordButton.classList.add("hidden");
+      continueButton.classList.remove("hidden");
+      continueButton.textContent = isLastStudentAction(unit()) ? "下一题" : "继续对话";
+      rerecordScoreButton.classList.remove("hidden");
+      rerecordScoreButton.disabled = false;
+      rerecordScoreButton.textContent = "重新作答并评估";
+      const hasPendingScore = pendingScoreTarget?.responseId === responseId;
+      retryScoreButton.classList.toggle("hidden", !hasPendingScore);
+      retryScoreButton.disabled = false;
+      skipScoreButton?.classList.add("hidden");
+    } else if (record?.transcript && record.status === "unscored") {
+      recordButton.classList.add("hidden");
+      continueButton.classList.add("hidden");
       retryScoreButton.classList.remove("hidden");
       retryScoreButton.disabled = false;
       rerecordScoreButton.classList.remove("hidden");
+      rerecordScoreButton.textContent = "重新录音并评分";
       rerecordScoreButton.disabled = false;
       if (skipScoreButton) skipScoreButton.classList.remove("hidden");
     } else {
       recordButton.classList.remove("hidden");
       recordButton.disabled = false;
+      continueButton.classList.add("hidden");
       retryScoreButton.classList.add("hidden");
       rerecordScoreButton.classList.add("hidden");
       skipScoreButton?.classList.add("hidden");
@@ -295,6 +313,8 @@ export function installExamController({ getSections, getExamAvailability, speakT
     sequenceIndex = 0;
     hintCounts = {};
     responseRecords = new Map();
+    practiceAttempts = new Map();
+    pendingScoreTarget = null;
     for (const current of plan.units) {
       const indexes = current.kind === "part2" ? current.studentTurnIndexes : [0];
       for (const turnIndex of indexes) {
@@ -352,11 +372,21 @@ export function installExamController({ getSections, getExamAvailability, speakT
 
   function renderResponseTranscript(record) {
     feedbackNode.replaceChildren();
-    if (!record?.transcript) return;
+    if (record?.transcript) {
+      renderAttemptResult(feedbackNode, record, record.status === "scored" ? "首次回答 · 计入正式成绩" : "首次回答 · 评分未完成", false);
+    }
+    const attempts = practiceAttempts.get(record?.responseId) ?? [];
+    attempts.forEach((attempt, index) => {
+      renderAttemptResult(feedbackNode, attempt, `练习重答 ${index + 1} · 不计入成绩`, true);
+    });
+  }
+
+  function renderAttemptResult(parent, record, label, isPractice) {
     const panel = document.createElement("section");
-    panel.className = "exam-transcript-panel";
-    addText(panel, "b", "", "本机识别到的回答");
-    addText(panel, "p", "exam-transcript", record.transcript);
+    panel.className = `exam-transcript-panel${isPractice ? " exam-practice-attempt" : ""}`;
+    addText(panel, "b", "exam-attempt-label", label);
+    if (record.transcript) addText(panel, "p", "exam-transcript", record.transcript);
+    else addText(panel, "p", "exam-attempt-pending", record.status === "recording" ? "正在录音…" : "等待回答识别");
     if (record.status === "scored" && record.scores) {
       const scoreGrid = document.createElement("div");
       scoreGrid.className = "exam-score-grid";
@@ -376,16 +406,19 @@ export function installExamController({ getSections, getExamAvailability, speakT
       const isPerfect = record.scores.total === 20;
       const total = document.createElement("div");
       total.className = `exam-total-score${isPerfect ? " is-perfect-total" : ""}`;
-      addText(total, "span", "exam-total-label", isPerfect ? "完美表现" : "本题总分");
+      addText(total, "span", "exam-total-label", isPractice ? "重答参考分 · 不计入成绩" : isPerfect ? "完美表现" : "本题总分");
       addText(total, "strong", "exam-total-value", `${record.scores.total} / 20`);
       panel.append(total);
+    } else if (record.status === "unscored" && record.transcript) {
+      addText(panel, "p", "exam-attempt-pending", "转写已保留 · 评分未完成");
     }
-    feedbackNode.append(panel);
+    parent.append(panel);
   }
 
   function displayStudentPrompt(current, turnIndex) {
     const responseId = responseIdFor(current, turnIndex);
     const record = responseRecords.get(responseId);
+    if (pendingScoreTarget && pendingScoreTarget.responseId !== responseId) pendingScoreTarget = null;
     currentResponseId = responseId;
     if (current.kind === "part1") {
       const question = getPart1PromptDisplay(current.question);
@@ -410,9 +443,14 @@ export function installExamController({ getSections, getExamAvailability, speakT
     if (record?.status === "scored") {
       continueButton.classList.remove("hidden");
       continueButton.textContent = isLastStudentAction(current) ? "下一题" : "继续对话";
+      rerecordScoreButton.classList.remove("hidden");
+      rerecordScoreButton.disabled = false;
+      rerecordScoreButton.textContent = "重新作答并评估";
+      setStatus("首次成绩已保留 · 可重新作答练习，重答成绩不计入结算");
     } else if (record?.transcript && record.status === "unscored") {
       retryScoreButton.classList.remove("hidden");
       rerecordScoreButton.classList.remove("hidden");
+      rerecordScoreButton.textContent = "重新录音并评分";
       recordButton.classList.add("hidden");
       setStatus("转写已保留，评分暂时失败；可以重试评分或重新录音。");
     } else {
@@ -540,11 +578,37 @@ export function installExamController({ getSections, getExamAvailability, speakT
     else displayStudentPrompt(current, action.turnIndex);
   }
 
-  async function beginRecording() {
+  function getAnswerRecord(responseId, attemptId = null) {
+    if (!attemptId) return responseRecords.get(responseId);
+    return (practiceAttempts.get(responseId) ?? []).find((attempt) => attempt.attemptId === attemptId);
+  }
+
+  function setAnswerRecord(responseId, nextRecord, attemptId = null) {
+    if (!attemptId) {
+      responseRecords.set(responseId, nextRecord);
+      return;
+    }
+    const attempts = practiceAttempts.get(responseId) ?? [];
+    const index = attempts.findIndex((attempt) => attempt.attemptId === attemptId);
+    if (index >= 0) attempts[index] = nextRecord;
+    else attempts.push(nextRecord);
+    practiceAttempts.set(responseId, attempts);
+  }
+
+  function removePracticeAttempt(responseId, attemptId) {
+    if (!attemptId) return;
+    const attempts = (practiceAttempts.get(responseId) ?? []).filter((attempt) => attempt.attemptId !== attemptId);
+    if (attempts.length) practiceAttempts.set(responseId, attempts);
+    else practiceAttempts.delete(responseId);
+  }
+
+  async function beginRecording({ practice = false } = {}) {
     if (!activeExamId || !currentResponseId || recordingSession || !unit()) return;
     primeScoreAudio();
     const examId = activeExamId;
     const responseId = currentResponseId;
+    const officialRecord = responseRecords.get(responseId);
+    const attemptId = practice ? (globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`) : null;
     setError("");
     recordButton.disabled = true;
     retryScoreButton.disabled = true;
@@ -563,28 +627,43 @@ export function installExamController({ getSections, getExamAvailability, speakT
         await session.cancel();
         return;
       }
+      const target = { responseId, attemptId };
+      recordingTarget = target;
+      if (attemptId) {
+        setAnswerRecord(responseId, { responseId, attemptId, status: "recording", transcript: "" }, attemptId);
+        renderResponseTranscript(officialRecord);
+      }
       recordingSession = session;
       recordButton.classList.add("hidden");
       stopButton.classList.remove("hidden");
       stopButton.disabled = false;
       setStatus("正在录音 · 最长 120 秒 · 录音仅在本机处理");
       session.completion.then((blob) => {
-        if (blob && isCurrent(examId, responseId)) void transcribeAnswer(blob, examId, responseId);
-        else if (isCurrent(examId, responseId)) restoreAnswerActions(responseRecords.get(responseId));
+        if (blob && isCurrent(examId, responseId)) void transcribeAnswer(blob, examId, responseId, attemptId);
+        else if (isCurrent(examId, responseId)) {
+          removePracticeAttempt(responseId, attemptId);
+          renderResponseTranscript(responseRecords.get(responseId));
+          restoreAnswerActions(responseId, attemptId);
+        }
       }).catch((error) => {
         if (isCurrent(examId, responseId)) {
+          removePracticeAttempt(responseId, attemptId);
+          renderResponseTranscript(responseRecords.get(responseId));
           setError(error instanceof Error ? error.message : "录音转换失败，请重试。");
           setStatus("录音失败 · 可重新录音");
-          restoreAnswerActions(responseRecords.get(responseId));
+          restoreAnswerActions(responseId, attemptId);
         }
       }).finally(() => {
-        if (recordingSession === session) recordingSession = null;
+        if (recordingSession === session) {
+          recordingSession = null;
+          if (recordingTarget === target) recordingTarget = null;
+        }
       });
     } catch (error) {
       if (isCurrent(examId, responseId)) {
         setError(error instanceof Error ? error.message : "无法开始录音。请检查浏览器麦克风权限和设备。");
         setStatus("麦克风不可用 · 当前题目未改变");
-        restoreAnswerActions(responseRecords.get(responseId));
+        restoreAnswerActions(responseId, attemptId);
       }
     }
   }
@@ -592,26 +671,27 @@ export function installExamController({ getSections, getExamAvailability, speakT
   async function stopRecording() {
     if (!recordingSession) return;
     const examId = activeExamId;
-    const responseId = currentResponseId;
+    const target = recordingTarget ?? { responseId: currentResponseId, attemptId: null };
     stopButton.disabled = true;
     setStatus("正在结束录音并准备本机识别…");
     try { await recordingSession.stop(); }
     catch (error) {
-      if (!isCurrent(examId, responseId)) return;
+      if (!isCurrent(examId, target.responseId)) return;
       setError(error instanceof Error ? error.message : "录音处理失败，请重试。");
-      restoreAnswerActions(responseRecords.get(responseId));
+      restoreAnswerActions(target.responseId, target.attemptId);
     }
   }
 
   async function cancelRecording() {
     const session = recordingSession;
     recordingSession = null;
+    recordingTarget = null;
     if (session) await session.cancel().catch(() => {});
   }
 
-  async function transcribeAnswer(blob, examId, responseId) {
+  async function transcribeAnswer(blob, examId, responseId, attemptId = null) {
     if (!isCurrent(examId, responseId)) return;
-    const record = responseRecords.get(responseId);
+    const record = getAnswerRecord(responseId, attemptId);
     if (!record) return;
     stopButton.classList.add("hidden");
     recordButton.classList.add("hidden");
@@ -623,20 +703,22 @@ export function installExamController({ getSections, getExamAvailability, speakT
       if (!response.ok) throw new Error(result.error ?? "本机语音识别失败，请重新录音。");
       if (typeof result.transcript !== "string" || !result.transcript.trim()) throw new Error("没有识别到英文回答，请重新录音。");
       const nextRecord = { ...record, transcript: result.transcript.trim(), status: "unscored" };
-      responseRecords.set(responseId, nextRecord);
-      renderResponseTranscript(nextRecord);
+      setAnswerRecord(responseId, nextRecord, attemptId);
+      renderResponseTranscript(responseRecords.get(responseId));
       setStatus("转写完成 · 正在本机语义评分…");
-      await scoreAnswer(examId, responseId);
+      await scoreAnswer(examId, responseId, attemptId);
     } catch (error) {
       if (!isCurrent(examId, responseId)) return;
+      removePracticeAttempt(responseId, attemptId);
+      renderResponseTranscript(responseRecords.get(responseId));
       setError(error instanceof Error ? error.message : "本机转写失败，请重新录音。");
       setStatus("识别失败 · 当前题未前进，可重新录音");
-      restoreAnswerActions(responseRecords.get(responseId));
+      restoreAnswerActions(responseId, attemptId);
     }
   }
 
-  async function scoreAnswer(examId, responseId) {
-    const record = responseRecords.get(responseId);
+  async function scoreAnswer(examId, responseId, attemptId = null) {
+    const record = getAnswerRecord(responseId, attemptId);
     if (!record?.transcript || !isCurrent(examId, responseId)) return;
     setError("");
     retryScoreButton.disabled = true;
@@ -656,30 +738,40 @@ export function installExamController({ getSections, getExamAvailability, speakT
       if (!isCurrent(examId, responseId)) return;
       if (!response.ok) throw new Error(formatScoringError(scores));
       const nextRecord = { ...record, status: "scored", scores };
-      responseRecords.set(responseId, nextRecord);
-      renderResponseTranscript(nextRecord);
-      if (scores.total === 20) playPerfectScoreSound();
+      setAnswerRecord(responseId, nextRecord, attemptId);
+      pendingScoreTarget = null;
+      renderResponseTranscript(responseRecords.get(responseId));
+      if (!attemptId && scores.total === 20) playPerfectScoreSound();
       retryScoreButton.classList.add("hidden");
-      rerecordScoreButton.classList.add("hidden");
+      rerecordScoreButton.classList.remove("hidden");
+      rerecordScoreButton.textContent = "重新作答并评估";
       skipScoreButton?.classList.add("hidden");
       continueButton.classList.remove("hidden");
       continueButton.textContent = isLastStudentAction(unit()) ? "下一题" : "继续对话";
-      setStatus(scores.total === 20 ? "本题满分 20 / 20 · 练习参考分数，不是官方考试成绩" : "评分完成 · 练习参考分数，不是官方考试成绩");
+      setStatus(attemptId
+        ? "重答评估完成 · 结果仅供练习，不计入模拟考成绩"
+        : scores.total === 20 ? "本题满分 20 / 20 · 首次评分已计入本次成绩" : "首次评分完成 · 可重新作答练习，重答不计入成绩");
     } catch (error) {
       if (!isCurrent(examId, responseId)) return;
       const nextRecord = { ...record, status: "unscored" };
-      responseRecords.set(responseId, nextRecord);
-      renderResponseTranscript(nextRecord);
+      setAnswerRecord(responseId, nextRecord, attemptId);
+      pendingScoreTarget = { responseId, attemptId };
+      renderResponseTranscript(responseRecords.get(responseId));
       retryScoreButton.classList.remove("hidden");
       rerecordScoreButton.classList.remove("hidden");
+      rerecordScoreButton.textContent = responseRecords.get(responseId)?.status === "scored" ? "重新作答并评估" : "重新录音并评分";
       retryScoreButton.disabled = false;
       rerecordScoreButton.disabled = false;
-      if (skipScoreButton) {
+      if (skipScoreButton && !attemptId && responseRecords.get(responseId)?.status !== "scored") {
         skipScoreButton.textContent = unit()?.kind === "part2" ? "跳过评分，继续对话" : "跳过评分，下一题";
         skipScoreButton.classList.remove("hidden");
       }
+      if (responseRecords.get(responseId)?.status === "scored") {
+        continueButton.classList.remove("hidden");
+        continueButton.textContent = isLastStudentAction(unit()) ? "下一题" : "继续对话";
+      }
       setError(error instanceof Error ? error.message : "本机评分失败，可保留转写后重试评分或重新录音。");
-      setStatus("评分未完成 · 已保留转写，可重试评分或重新录音");
+      setStatus(attemptId ? "重答评分未完成 · 首次成绩已保留，可重试评分、重新作答或继续" : "评分未完成 · 已保留转写，可重试评分或重新录音");
     } finally {
       retryScoreButton.disabled = false;
       rerecordScoreButton.disabled = false;
@@ -687,8 +779,9 @@ export function installExamController({ getSections, getExamAvailability, speakT
   }
 
   function retryScore() {
-    if (!currentResponseId) return;
-    void scoreAnswer(activeExamId, currentResponseId);
+    const target = pendingScoreTarget;
+    if (!target || target.responseId !== currentResponseId) return;
+    void scoreAnswer(activeExamId, target.responseId, target.attemptId);
   }
 
   async function continueExam() {
@@ -758,6 +851,22 @@ export function installExamController({ getSections, getExamAvailability, speakT
     addExamButton(actions, "关闭", "quiet-button", () => summaryPanel.close()).setAttribute("aria-label", "关闭成绩面板");
     heading.append(copy, actions);
     summaryPanel.append(heading);
+    const overview = document.createElement("section");
+    overview.className = "exam-summary-overview";
+    addText(overview, "h4", "", "成绩简报");
+    const overviewCards = document.createElement("div");
+    overviewCards.className = "exam-summary-overview-cards";
+    for (const sectionId of ["phase1", "phase2", "part2"]) {
+      const data = summary.bySection[sectionId];
+      const card = document.createElement("article");
+      card.className = "exam-summary-overview-card";
+      addText(card, "span", "exam-summary-overview-label", SECTION_NAMES[sectionId]);
+      addText(card, "strong", "exam-summary-overview-score", `${formatAverage(data.averages.total)} / 20`);
+      addText(card, "span", "exam-summary-overview-meta", `已评分 ${data.scoredCount} · 未完成 ${data.uncompletedCount} · 提示 ${data.hintCount} 次`);
+      overviewCards.append(card);
+    }
+    overview.append(overviewCards);
+    summaryPanel.append(overview);
     for (const sectionId of ["phase1", "phase2", "part2"]) {
       const section = document.createElement("section");
       section.className = "exam-summary-section";
@@ -809,24 +918,36 @@ export function installExamController({ getSections, getExamAvailability, speakT
             addText(row, "p", "exam-summary-context", precedingTurns.map((item) => `Speaker ${item.role}: ${item.text}`).join("\n"));
           }
         }
-        addText(row, "span", "exam-summary-detail-label", "你的回答（语音转写）");
+        const officialAnswerLabel = record.status === "scored"
+          ? "首次回答（语音转写 · 计入正式成绩）"
+          : "首次回答（语音转写 · 未完成评分）";
+        addText(row, "span", "exam-summary-detail-label", officialAnswerLabel);
         addText(row, "p", "exam-summary-answer", record.transcript || "本题未作答");
         if (record.status === "scored" && record.scores) {
-          const feedbackList = document.createElement("div");
-          feedbackList.className = "exam-summary-feedback-list";
-          for (const [key, label] of [["relevance", "切题"], ["completeness", "完整"], ["grammar", "语法"], ["vocabulary", "词汇"]]) {
-            const value = record.scores[key];
-            const feedbackItem = document.createElement("div");
-            feedbackItem.className = `exam-summary-feedback-item${value.score === 5 ? " is-perfect-dimension" : ""}`;
-            const feedbackHeading = document.createElement("div");
-            feedbackHeading.className = "exam-summary-feedback-heading";
-            addText(feedbackHeading, "b", "", label);
-            addText(feedbackHeading, "span", "exam-summary-feedback-score", `${value.score} / 5`);
-            addText(feedbackItem, "p", "exam-summary-feedback-copy", value.feedback);
-            feedbackItem.prepend(feedbackHeading);
-            feedbackList.append(feedbackItem);
-          }
-          row.append(feedbackList);
+          appendSummaryScores(row, record.scores);
+        }
+        const attempts = practiceAttempts.get(record.responseId) ?? [];
+        if (attempts.length) {
+          const attemptList = document.createElement("div");
+          attemptList.className = "exam-summary-practice-list";
+          attempts.forEach((attempt, index) => {
+            const attemptRow = document.createElement("article");
+            attemptRow.className = "exam-summary-practice-item";
+            const attemptHeading = document.createElement("div");
+            attemptHeading.className = "exam-summary-item-heading";
+            addText(attemptHeading, "b", "", `练习重答 ${index + 1} · 不计入成绩`);
+            if (attempt.status === "scored" && attempt.scores) {
+              addText(attemptHeading, "span", "exam-summary-score", `${attempt.scores.total} / 20`);
+            } else {
+              addText(attemptHeading, "span", "exam-summary-unscored", attempt.transcript ? "已转写 · 未评分" : "未完成");
+            }
+            attemptRow.append(attemptHeading);
+            addText(attemptRow, "span", "exam-summary-detail-label", "重答内容（语音转写）");
+            addText(attemptRow, "p", "exam-summary-answer", attempt.transcript || "没有保留可供评估的转写");
+            if (attempt.status === "scored" && attempt.scores) appendSummaryScores(attemptRow, attempt.scores);
+            attemptList.append(attemptRow);
+          });
+          row.append(attemptList);
         }
         items.append(row);
       }
@@ -837,6 +958,24 @@ export function installExamController({ getSections, getExamAvailability, speakT
 
   function formatAverage(value) {
     return value === null ? "—" : value.toFixed(1);
+  }
+
+  function appendSummaryScores(container, scores) {
+    const feedbackList = document.createElement("div");
+    feedbackList.className = "exam-summary-feedback-list";
+    for (const [key, label] of [["relevance", "切题"], ["completeness", "完整"], ["grammar", "语法"], ["vocabulary", "词汇"]]) {
+      const value = scores[key];
+      const feedbackItem = document.createElement("div");
+      feedbackItem.className = `exam-summary-feedback-item${value.score === 5 ? " is-perfect-dimension" : ""}`;
+      const feedbackHeading = document.createElement("div");
+      feedbackHeading.className = "exam-summary-feedback-heading";
+      addText(feedbackHeading, "b", "", label);
+      addText(feedbackHeading, "span", "exam-summary-feedback-score", `${value.score} / 5`);
+      addText(feedbackItem, "p", "exam-summary-feedback-copy", value.feedback);
+      feedbackItem.prepend(feedbackHeading);
+      feedbackList.append(feedbackItem);
+    }
+    container.append(feedbackList);
   }
 
   startButton.addEventListener("click", beginExam);
@@ -857,7 +996,10 @@ export function installExamController({ getSections, getExamAvailability, speakT
   endButton.addEventListener("click", () => { void finishExam(); });
   referenceToggle.addEventListener("click", toggleReference);
   retryScoreButton.addEventListener("click", retryScore);
-  rerecordScoreButton.addEventListener("click", () => { void beginRecording(); });
+  rerecordScoreButton.addEventListener("click", () => {
+    const record = responseRecords.get(currentResponseId);
+    void beginRecording({ practice: record?.status === "scored" });
+  });
   skipScoreButton?.addEventListener("click", () => { void skipUnscoredResponse(); });
 
   renderAvailability();
@@ -872,7 +1014,9 @@ export function installExamController({ getSections, getExamAvailability, speakT
       sequenceIndex = 0;
       currentResponseId = "";
       responseRecords.clear();
+      practiceAttempts.clear();
       hintCounts = {};
+      pendingScoreTarget = null;
       exitExamMode();
       sessionPanel.classList.add("hidden");
       practicePanel.classList.remove("hidden");
@@ -892,7 +1036,9 @@ export function installExamController({ getSections, getExamAvailability, speakT
       if (summaryPanel.open) summaryPanel.close();
       activeExamId = "";
       responseRecords.clear();
+      practiceAttempts.clear();
       hintCounts = {};
+      pendingScoreTarget = null;
       exitExamMode();
       sessionPanel.classList.add("hidden");
       practicePanel.classList.remove("hidden");
