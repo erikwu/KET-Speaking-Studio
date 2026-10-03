@@ -177,6 +177,15 @@ summary: Part 2 example
   });
 });
 
+test("config reports the installed package version", async () => {
+  await withServer(async ({baseUrl}) => {
+    const config = await (await fetch(`${baseUrl}/api/config`)).json() as any;
+    const installed = JSON.parse(await readFile(path.resolve("package.json"), "utf8"));
+    assert.match(config.appVersion ?? "", /^\d+\.\d+\.\d+$/);
+    assert.equal(config.appVersion, installed.version);
+  });
+});
+
 test("parse accepts plain and emphasized roles, fullwidth colons and nested Part headings", async () => {
   await withServer(async ({baseUrl, root}) => {
     const {parsed} = await parseFixture(baseUrl, root, `# Practice

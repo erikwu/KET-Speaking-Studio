@@ -166,6 +166,9 @@ function installSettings() {
 async function loadConfig() {
   const response = await fetch("/api/config");
   const config = await response.json();
+  const version = $("#app-version");
+  version.textContent = config.appVersion && config.appVersion !== "unknown" ? `v${config.appVersion}` : "版本未知";
+  version.title = `当前服务版本：${config.appVersion ?? "未知"}`;
   modelAvailable = Boolean(config.speechAvailable ?? (config.modelReady && config.runtimeReady));
   const missingExamCapabilities = [];
   if (!config.asrModelReady) missingExamCapabilities.push("Whisper 英语识别模型");

@@ -104,6 +104,8 @@ interface AudioCacheJob {
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
+// Capture the version of this server at startup, including ZIP installations.
+const APP_VERSION: string = JSON.parse(await readFile(path.join(ROOT, "package.json"), "utf8")).version ?? "unknown";
 function fromRoot(value: string): string {
   return path.isAbsolute(value) ? path.normalize(value) : path.resolve(ROOT, value);
 }
@@ -1177,6 +1179,7 @@ const server = createServer(async (req, res) => {
     const archiveToolsReady = existsSync("/usr/bin/zip") && existsSync("/usr/bin/unzip");
     const examState = await getExamModelState();
     json(res, 200, {
+      appVersion: APP_VERSION,
       modelName: path.basename(MODEL_DIR),
       modelPath: path.relative(ROOT, MODEL_DIR),
       modelReady: speechModelReady,

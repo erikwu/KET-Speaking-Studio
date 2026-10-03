@@ -3,6 +3,7 @@ import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, writeFile, rename, rm, lstat, realpath, open } from "node:fs/promises";
 import path from "node:path";
+import { verifyVersionBump } from "../scripts/check-version.ts";
 
 const exec = promisify(execFile);
 export const UPDATE_REPOSITORY = "https://github.com/erikwu/KET-Speaking-Studio.git";
@@ -174,6 +175,12 @@ export function createAppUpdater({ root, repository = UPDATE_REPOSITORY }: { roo
         }
         const oldPackage = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
         const newPackage = JSON.parse(await readFile(path.join(stage, "package.json"), "utf8"));
+        if (oldPackage.version !== undefined || newPackage.version !== undefined) {
+          const oldFiles = new Map(before.map(entry => [entry.name, `${entry.hash}:${entry.mode}`]));
+          const newFiles = new Map(after.map(entry => [entry.name, `${entry.hash}:${entry.mode}`]));
+          const changed = [...new Set([...oldFiles.keys(), ...newFiles.keys()])].filter(name => oldFiles.get(name) !== newFiles.get(name));
+          verifyVersionBump(oldPackage.version, newPackage.version, changed);
+        }
         if (JSON.stringify(oldPackage.dependencies ?? {}) !== JSON.stringify(newPackage.dependencies ?? {})) throw new Error("新版需要更新运行依赖，请先备份并重新运行 install.command。");
         const plan: Plan = { ...base, target, before, after, ownerPid: process.pid };
         await atomic(journal, JSON.stringify(plan));

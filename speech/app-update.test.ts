@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtemp, mkdir, writeFile, readFile, rm, symlink } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm, symlink, chmod } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { createAppUpdater } from "./app-update.ts";
@@ -15,7 +15,7 @@ async function fixture(run: (f: any) => Promise<void>) {
   await mkdir(remote);
   await git(remote, "init", "-b", "main");
   await mkdir(path.join(remote, "speech"));
-  await writeFile(path.join(remote, "package.json"), '{"type":"module","scripts":{"start:tts":"node speech/launcher.ts"}}');
+  await writeFile(path.join(remote, "package.json"), '{"type":"module","version":"1.0.0","scripts":{"start:tts":"node speech/launcher.ts"}}');
   await writeFile(path.join(remote, "speech/server.ts"), 'console.log("old");\n');
   await writeFile(path.join(remote, "speech/launcher.ts"), 'console.log("launcher");\n');
   await writeFile(path.join(remote, "obsolete.txt"), "old file");
@@ -23,6 +23,9 @@ async function fixture(run: (f: any) => Promise<void>) {
   const initial = await git(remote, "rev-parse", "HEAD");
   await git(temp, "clone", remote, root);
   const advance = async () => {
+    const manifest = JSON.parse(await readFile(path.join(remote, "package.json"), "utf8"));
+    manifest.version = "1.0.1";
+    await writeFile(path.join(remote, "package.json"), JSON.stringify(manifest));
     await writeFile(path.join(remote, "speech/server.ts"), 'console.log("new");\n');
     await writeFile(path.join(remote, "new.txt"), "new file");
     await git(remote, "rm", "obsolete.txt");
@@ -39,8 +42,10 @@ test("git update and rollback preserve models, environment and practice files", 
     const target = await advance(); const u = updater();
     const info = await u.check(); assert.equal(info.target, target); assert.equal(info.available, true); assert.match(info.notes, /Improve practice/);
     await u.apply(target); assert.equal(await git(root, "rev-parse", "HEAD"), target);
+    assert.equal(JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version, "1.0.1");
     assert.match(await readFile(path.join(root, "speech/server.ts"), "utf8"), /new/);
     await u.rollback(); assert.equal(await git(root, "rev-parse", "HEAD"), initial);
+    assert.equal(JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version, "1.0.0");
     assert.equal(await readFile(path.join(root, "obsolete.txt"), "utf8"), "old file");
     for (const dir of ["models", ".venv", "outputs"]) assert.equal(await readFile(path.join(root, dir, "keep"), "utf8"), dir);
   });
@@ -51,6 +56,18 @@ test("local tracked edits block updates before any replacement", async () => {
     await advance(); await writeFile(path.join(root, "speech/server.ts"), "my changes");
     await assert.rejects(updater().check(), /本地.*修改/);
     assert.equal(await readFile(path.join(root, "speech/server.ts"), "utf8"), "my changes");
+  });
+});
+
+for (const modeOnly of [false, true]) test(`an update cannot change ${modeOnly ? "executable permissions" : "application code"} without increasing its version`, async () => {
+  await fixture(async ({root, remote, updater}) => {
+    if (modeOnly) await chmod(path.join(remote, "speech/server.ts"), 0o755);
+    else await writeFile(path.join(remote, "speech/server.ts"), 'console.log("unversioned change");');
+    await git(remote, "add", "."); await git(remote, "commit", "-m", "Forgot to bump version");
+    const u = updater(), info = await u.check();
+    await assert.rejects(u.apply(info.target), /提升版本号/);
+    assert.match(await readFile(path.join(root, "speech/server.ts"), "utf8"), /old/);
+    assert.equal(JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version, "1.0.0");
   });
 });
 
@@ -78,9 +95,11 @@ test("ZIP installation is matched to history, updated, and recovered after inter
     const target = await advance(); const u = updater();
     assert.equal((await u.check()).mode, "zip");
     await u.apply(target);
+    assert.equal(JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version, "1.0.1");
     assert.equal(await readFile(path.join(root, "new.txt"), "utf8"), "new file");
     await assert.rejects(readFile(path.join(root, "obsolete.txt")), /ENOENT/);
     await updater().recover();
+    assert.equal(JSON.parse(await readFile(path.join(root, "package.json"), "utf8")).version, "1.0.0");
     assert.equal(await readFile(path.join(root, "obsolete.txt"), "utf8"), "old file");
     await assert.rejects(readFile(path.join(root, "new.txt")), /ENOENT/);
     assert.equal(await readFile(path.join(root, "my-notes.md"), "utf8"), "personal");
