@@ -20,7 +20,12 @@
 
 ## 首次安装
 
-适用于 Apple Silicon Mac。双击项目根目录的 [`install.command`](install.command)，按提示完成依赖和本地模型安装。安装脚本会启动 KET Speaking 服务并打开 8788 页面。现在会安装 TTS、图片、模拟考转写和评分模型；完整模型约 33 GiB，建议至少预留 40 GiB 可用空间（包含临时下载空间）。系统要求、下载过程和模型许可说明见 [`speech/README.md`](speech/README.md)。
+适用于 Apple Silicon Mac。双击项目根目录的 [`install.command`](install.command)，选择完整安装或最小安装，按提示完成依赖和本地模型安装。两种配置都会启动 KET Speaking 服务并打开 8788 页面。
+
+- **完整安装**：安装 TTS、图片、模拟考转写和评分模型，模型约 33 GiB，建议至少预留 40 GiB 可用空间（包含临时下载空间）。
+- **最小安装**：只安装模拟考的 Whisper 转写和 Qwen3 评分模型，权重约 3.9 GB；建议预留约 10 GiB 可用空间。语音和情景图片通过 8788 页面导入离线资源包使用，不安装语音/图片生成模型或相关生成依赖。此配置下实时语音、图片生成和 8787 图片生成工作室不可用。
+
+系统要求、安装选项和模型许可说明见 [`speech/README.md`](speech/README.md)。
 
 ## 启动服务
 

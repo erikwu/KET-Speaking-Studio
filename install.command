@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV_DIR="$ROOT_DIR/.venv"
 PYTHON_BIN="$VENV_DIR/bin/python"
+INSTALL_PROFILE="full"
 TTS_MODEL_DIR="$ROOT_DIR/models/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16"
 IMAGE_MODEL_DIR="$ROOT_DIR/models/Qwen-Image-2.1-MLX-4bit"
 ASR_MODEL_DIR="$ROOT_DIR/models/whisper-large-v3-turbo"
@@ -23,6 +24,28 @@ fail() {
   printf '\n安装未完成：%s\n' "$1" >&2
   printf '修复提示后可再次双击 install.command；下载会从已完成的文件继续。\n' >&2
   exit 1
+}
+
+select_install_profile() {
+  local choice
+  printf '请选择安装配置：\n'
+  printf '  1) 完整安装：语音、图片和模拟考模型（约 33 GiB 模型空间）\n'
+  printf '  2) 最小安装：仅模拟考模型；语音和图片通过导入离线资源包使用（约 3.9 GB 模型）\n'
+  while true; do
+    printf '请输入 1 或 2 [默认 1]：'
+    read -r choice
+    choice="${choice:-1}"
+    case "$choice" in
+      1) INSTALL_PROFILE="full"; break ;;
+      2) INSTALL_PROFILE="minimal"; break ;;
+      *) printf '请输入 1 或 2。\n' ;;
+    esac
+  done
+  if [[ "$INSTALL_PROFILE" == "minimal" ]]; then
+    say "已选择最小安装：模拟考可用；语音与配图请导入离线资源包"
+  else
+    say "已选择完整安装：本地语音、配图和模拟考均可生成"
+  fi
 }
 
 require_platform() {
@@ -194,11 +217,13 @@ ensure_ffmpeg() {
 check_free_space() {
   local missing_gib required_gib available_kib
   missing_gib=0
-  if ! verify_tts_model >/dev/null 2>&1; then
-    missing_gib=$((missing_gib + 5))
-  fi
-  if ! verify_image_model >/dev/null 2>&1; then
-    missing_gib=$((missing_gib + 23))
+  if [[ "$INSTALL_PROFILE" == "full" ]]; then
+    if ! verify_tts_model >/dev/null 2>&1; then
+      missing_gib=$((missing_gib + 5))
+    fi
+    if ! verify_image_model >/dev/null 2>&1; then
+      missing_gib=$((missing_gib + 23))
+    fi
   fi
   if ! verify_asr_model "$ASR_MODEL_DIR" >/dev/null 2>&1; then
     missing_gib=$((missing_gib + 2))
@@ -241,43 +266,52 @@ ensure_python_environment() {
     uv venv --python 3.13 "$VENV_DIR"
   fi
 
-  say "正在安装本地语音、图片和模拟考运行环境"
-  if ! uv pip install --python "$PYTHON_BIN" \
-    mlx-audio \
-    huggingface_hub \
-    "mlx-whisper==0.4.3" \
-    "mlx-lm==0.32.0" \
-    "mflux @ git+https://github.com/mflux-community/mflux.git@${MFLUX_COMMIT}"
-  then
-    fail "MLX-Audio、mlx-whisper、mlx-lm 与 mflux 依赖安装或版本兼容检查失败。请查看上方信息并修复 Python/MLX 环境后重试。"
+  local -a python_packages
+  if [[ "$INSTALL_PROFILE" == "minimal" ]]; then
+    say "正在准备模拟考和离线资源导入所需的 Python 环境"
+    python_packages=(huggingface_hub "mlx-whisper==0.4.3" "mlx-lm==0.32.0")
+  else
+    say "正在安装本地语音、图片和模拟考运行环境"
+    python_packages=(mlx-audio huggingface_hub "mlx-whisper==0.4.3" "mlx-lm==0.32.0" "mflux @ git+https://github.com/mflux-community/mflux.git@${MFLUX_COMMIT}")
   fi
-  if ! "$PYTHON_BIN" -c 'import mlx_audio, mlx_whisper, mlx_lm' >/dev/null 2>&1; then
+  if ! uv pip install --python "$PYTHON_BIN" "${python_packages[@]}"; then
+    fail "所选安装配置的 Python/MLX 依赖安装或版本兼容检查失败。请查看上方信息并修复环境后重试。"
+  fi
+  if [[ "$INSTALL_PROFILE" == "minimal" ]]; then
+    if ! "$PYTHON_BIN" -c 'import mlx_whisper, mlx_lm' >/dev/null 2>&1; then
+      fail "mlx-whisper 或 mlx-lm 无法导入；请检查 Python/MLX 依赖兼容性。"
+    fi
+  elif ! "$PYTHON_BIN" -c 'import mlx_audio, mlx_whisper, mlx_lm' >/dev/null 2>&1; then
     fail "MLX-Audio、mlx-whisper 或 mlx-lm 无法导入；请检查 Python/MLX 依赖兼容性。"
   fi
   [[ -x "$VENV_DIR/bin/hf" ]] || fail "Hugging Face 下载命令没有安装成功。"
-  [[ -x "$VENV_DIR/bin/mflux-generate-qwen-2.1" ]] || fail "mflux 的 Qwen Image 2.1 命令没有安装成功。"
+  if [[ "$INSTALL_PROFILE" == "full" ]]; then
+    [[ -x "$VENV_DIR/bin/mflux-generate-qwen-2.1" ]] || fail "mflux 的 Qwen Image 2.1 命令没有安装成功。"
+  fi
 }
 
 download_models() {
   local hf_bin
   hf_bin="$VENV_DIR/bin/hf"
 
-  if verify_tts_model; then
-    printf '语音模型已完整，跳过下载。\n'
-  else
-    say "正在下载 Qwen3-TTS VoiceDesign 语音模型"
-    "$hf_bin" download \
-      mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16 \
-      --local-dir "$TTS_MODEL_DIR"
-    verify_tts_model || fail "语音模型文件校验未通过。"
-  fi
+  if [[ "$INSTALL_PROFILE" == "full" ]]; then
+    if verify_tts_model; then
+      printf '语音模型已完整，跳过下载。\n'
+    else
+      say "正在下载 Qwen3-TTS VoiceDesign 语音模型"
+      "$hf_bin" download \
+        mlx-community/Qwen3-TTS-12Hz-1.7B-VoiceDesign-bf16 \
+        --local-dir "$TTS_MODEL_DIR"
+      verify_tts_model || fail "语音模型文件校验未通过。"
+    fi
 
-  if verify_image_model; then
-    printf '图片模型已完整，跳过下载。\n'
-  else
-    say "正在下载 Qwen Image 2.1 MLX 4-bit 图片模型（约 20 GB）"
-    "$hf_bin" download "$IMAGE_MODEL_REPO" --local-dir "$IMAGE_MODEL_DIR"
-    verify_image_model || fail "图片模型文件校验未通过。"
+    if verify_image_model; then
+      printf '图片模型已完整，跳过下载。\n'
+    else
+      say "正在下载 Qwen Image 2.1 MLX 4-bit 图片模型（约 20 GB）"
+      "$hf_bin" download "$IMAGE_MODEL_REPO" --local-dir "$IMAGE_MODEL_DIR"
+      verify_image_model || fail "图片模型文件校验未通过。"
+    fi
   fi
 
   if verify_asr_model "$ASR_MODEL_DIR"; then
@@ -298,7 +332,7 @@ download_models() {
 }
 
 config_is_ready() {
-  "$NODE_BIN" -e 'let input="";process.stdin.setEncoding("utf8");process.stdin.on("data",chunk=>input+=chunk);process.stdin.on("end",()=>{try{const c=JSON.parse(input);process.exit(c.modelReady&&c.runtimeReady&&c.illustrationReady&&c.examAvailable?0:1)}catch{process.exit(1)}})'
+  "$NODE_BIN" -e 'let input="";process.stdin.setEncoding("utf8");process.stdin.on("data",chunk=>input+=chunk);process.stdin.on("end",()=>{try{const c=JSON.parse(input);const ready=process.argv[1]==="minimal"?c.examAvailable&&c.archiveToolsReady:c.modelReady&&c.runtimeReady&&c.illustrationReady&&c.examAvailable;process.exit(ready?0:1)}catch{process.exit(1)}})' "$INSTALL_PROFILE"
 }
 
 open_existing_server() {
@@ -352,6 +386,7 @@ start_app() {
 }
 
 main() {
+  select_install_profile
   require_platform
   ensure_command_line_tools
   ensure_homebrew

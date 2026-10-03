@@ -4,9 +4,13 @@ TypeScript 本地网页读取 Markdown 中的 Part 1 / Phase 1、Part 1 / Phase 
 
 ## 新机器一键安装
 
-适用于 Apple Silicon Mac。双击项目根目录的 `install.command`，脚本会检查并准备 Homebrew、Node.js 22、Python 3.13、FFmpeg 和项目 `.venv`，安装 MLX-Audio、mlx-whisper、mlx-lm 与支持 Qwen Image 2.1 的 mflux，下载并校验语音、图片、模拟考转写和评分模型，随后启动服务并打开 <http://127.0.0.1:8788>。
+适用于 Apple Silicon Mac。双击项目根目录的 `install.command`，选择完整安装或最小安装。两种配置都会准备 Homebrew、Node.js 22、Python 3.13、FFmpeg 和项目 `.venv`，下载并校验所选模型，随后启动服务并打开 <http://127.0.0.1:8788>。
 
-TTS 与图片模型加上模拟考模型约需 33 GiB 磁盘空间；首次安装建议至少保留 40 GiB 可用空间和稳定网络。模拟考所需权重约 3.9 GB，安装器会按约 5 GiB 预留空间。若 macOS 尚未安装 Command Line Tools，脚本会打开 Apple 的安装窗口；完成后回到终端按回车继续。Homebrew 安装时可能要求输入本机管理员密码。模型下载支持断点续传，已校验完整的模型会跳过。
+**完整安装**会安装 MLX-Audio、mlx-whisper、mlx-lm、mflux，以及语音、图片和模拟考模型。模型约需 33 GiB，建议至少保留 40 GiB 可用磁盘空间和稳定网络。
+
+**最小安装**只安装 `mlx-whisper`、`mlx-lm` 和模拟考所需模型：[`mlx-community/whisper-large-v3-turbo`](https://huggingface.co/mlx-community/whisper-large-v3-turbo)（约 1.6 GB）与 [`mlx-community/Qwen3-4B-4bit`](https://huggingface.co/mlx-community/Qwen3-4B-4bit)（约 2.3 GB）。权重合计约 3.9 GB；安装器会额外预留下载临时空间，建议至少保留约 10 GiB 可用空间。它不会下载 TTS/图片模型或安装生成语音、图片所需的依赖。启动后可在 8788 页面导入 `.ketpack.zip`，使用其中的 Markdown、预生成语音和已生成配图；模拟考可用，实时语音生成、补生成配图和 8787 图片生成不可用。
+
+若 macOS 尚未安装 Command Line Tools，脚本会打开 Apple 的安装窗口；完成后回到终端按回车继续。Homebrew 安装时可能要求输入本机管理员密码。模型下载支持断点续传，已校验完整的模型会跳过。
 
 安装完成后，服务会在打开的终端窗口持续运行；按 Control-C 停止。再次双击 `install.command` 可复用已安装环境和模型，并启动页面。
 

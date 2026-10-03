@@ -748,11 +748,13 @@ export function installExamController({ getSections, getExamAvailability, speakT
     copy.className = "exam-summary-heading-copy";
     addText(copy, "h3", "", "本次模拟考结果").id = "exam-summary-title";
     addText(copy, "p", "", `已评分 ${summary.scoredCount} 题 · 未完成 ${summary.uncompletedCount} 题 · 查看提示 ${summary.hintCount} 次`).id = "exam-summary-meta";
+    addText(copy, "p", "exam-summary-date", `完成时间：${new Intl.DateTimeFormat("zh-Hans", { dateStyle: "medium", timeStyle: "short" }).format(new Date())}`);
     const actions = document.createElement("div");
     actions.className = "exam-summary-actions";
     summarySoundButton = addExamButton(actions, "", "quiet-button exam-sound-toggle", toggleScoreSound);
     summarySoundButton.setAttribute("aria-pressed", String(scoreSoundEnabled));
     syncScoreSoundButtons();
+    addExamButton(actions, "保存为 PDF", "cache-button", () => window.print()).title = "在打印窗口中选择‘存储为 PDF’";
     addExamButton(actions, "关闭", "quiet-button", () => summaryPanel.close()).setAttribute("aria-label", "关闭成绩面板");
     heading.append(copy, actions);
     summaryPanel.append(heading);
@@ -771,7 +773,9 @@ export function installExamController({ getSections, getExamAvailability, speakT
         row.className = "exam-summary-item";
         const questionUnit = plan?.units.find((item) => item.id === record.unitId);
         const number = (plan?.units.filter((item) => item.sectionId === sectionId).findIndex((item) => item.id === record.unitId) ?? -1) + 1;
-        const speaker = questionUnit?.kind === "part2" ? ` · Speaker ${questionUnit.turns[record.turnIndex]?.role}` : "";
+        const speaker = questionUnit?.kind === "part2"
+          ? ` · Speaker ${questionUnit.turns[record.turnIndex]?.role} · 对话第 ${record.turnIndex + 1} 轮`
+          : "";
         const itemHeading = document.createElement("div");
         itemHeading.className = "exam-summary-item-heading";
         addText(itemHeading, "b", "", `第 ${number} 题${speaker}`);
@@ -782,19 +786,47 @@ export function installExamController({ getSections, getExamAvailability, speakT
           score.setAttribute("aria-label", isPerfect ? "本题满分 20 分" : `本题 ${record.scores.total} 分，共 20 分`);
           if (isPerfect) addText(itemHeading, "span", "exam-score-honor", "满分");
         } else {
-          addText(itemHeading, "span", "exam-summary-unscored", "未完成");
+          addText(itemHeading, "span", "exam-summary-unscored", record.transcript ? "已作答 · 未评分" : "未作答");
         }
         row.append(itemHeading);
-        if (record.transcript) addText(row, "p", "exam-transcript", record.transcript);
+        if (questionUnit?.kind === "part1") {
+          addText(row, "span", "exam-summary-detail-label", "问题");
+          addText(row, "p", "exam-summary-prompt", questionUnit.question.text);
+          if (questionUnit.question.translation) addText(row, "p", "exam-summary-translation", questionUnit.question.translation);
+        } else if (questionUnit?.kind === "part2") {
+          const turn = questionUnit.turns[record.turnIndex];
+          if (questionUnit.group.context) {
+            addText(row, "span", "exam-summary-detail-label", "情景");
+            addText(row, "p", "exam-summary-context", questionUnit.group.context);
+          }
+          if (turn) {
+            addText(row, "span", "exam-summary-detail-label", "你的提示");
+            addText(row, "p", "exam-summary-prompt", getPart2StudentPrompt(turn));
+          }
+          const precedingTurns = questionUnit.turns.slice(0, record.turnIndex);
+          if (precedingTurns.length) {
+            addText(row, "span", "exam-summary-detail-label", "此前对话");
+            addText(row, "p", "exam-summary-context", precedingTurns.map((item) => `Speaker ${item.role}: ${item.text}`).join("\n"));
+          }
+        }
+        addText(row, "span", "exam-summary-detail-label", "你的回答（语音转写）");
+        addText(row, "p", "exam-summary-answer", record.transcript || "本题未作答");
         if (record.status === "scored" && record.scores) {
-          const dimensions = document.createElement("div");
-          dimensions.className = "exam-summary-dimensions";
+          const feedbackList = document.createElement("div");
+          feedbackList.className = "exam-summary-feedback-list";
           for (const [key, label] of [["relevance", "切题"], ["completeness", "完整"], ["grammar", "语法"], ["vocabulary", "词汇"]]) {
             const value = record.scores[key];
-            const dimension = addText(dimensions, "span", `exam-summary-dimension${value.score === 5 ? " is-perfect-dimension" : ""}`, `${label} ${value.score}`);
-            if (value.score === 5) dimension.setAttribute("aria-label", `${label}度单项满分 5 分`);
+            const feedbackItem = document.createElement("div");
+            feedbackItem.className = `exam-summary-feedback-item${value.score === 5 ? " is-perfect-dimension" : ""}`;
+            const feedbackHeading = document.createElement("div");
+            feedbackHeading.className = "exam-summary-feedback-heading";
+            addText(feedbackHeading, "b", "", label);
+            addText(feedbackHeading, "span", "exam-summary-feedback-score", `${value.score} / 5`);
+            addText(feedbackItem, "p", "exam-summary-feedback-copy", value.feedback);
+            feedbackItem.prepend(feedbackHeading);
+            feedbackList.append(feedbackItem);
           }
-          row.append(dimensions);
+          row.append(feedbackList);
         }
         items.append(row);
       }
