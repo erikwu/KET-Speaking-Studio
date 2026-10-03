@@ -299,10 +299,10 @@ function stripFrontmatter(markdown: string): string {
 }
 
 function cleanTurnLine(line: string): { role: "Q" | "A" | "B"; text: string; translation: string } | null {
-  const roleMatch = /^\s*(?:(?:[-*+]|\d+\.)\s*)?\*\*?\s*([QAB])\s*:\s*/i.exec(line);
+  const roleMatch = /^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\*{1,2}|_{1,2})?\s*([QAB])\s*(?:\*{1,2}|_{1,2})?\s*[:：]\s*/i.exec(line);
   if (!roleMatch) return null;
   let remainder = line.slice(roleMatch[0].length).trim();
-  remainder = remainder.replace(/\*\*\s*$/, "").replace(/\*\s*$/, "").trim();
+  remainder = remainder.replace(/(?:\*{1,2}|_{1,2})\s*$/, "").trim();
 
   let translation = "";
   const translationMatch = /[（(]([^（）()]*)[）)]\s*$/.exec(remainder);
@@ -332,40 +332,52 @@ function parseMarkdown(markdown: string): ParsedSection[] {
     ["part2", { id: "part2", title: SECTION_TITLES.part2, groups: [] }],
   ]);
   let active: SectionId | null = null;
+  let activeLevel = 0;
+  let part1Level = 0;
   let current: Group | null = null;
+  let fence: { marker: string; length: number } | null = null;
 
   for (const line of stripFrontmatter(markdown).split(/\r?\n/)) {
-    const heading = /^#{1,4}\s+(.+?)\s*#*\s*$/.exec(line)?.[1] ?? "";
-    const normalizedHeading = heading.toLowerCase().replace(/\s+/g, " ");
-    if (/\bpart\s*1\b/.test(normalizedHeading) && /\bphase\s*1\b/.test(normalizedHeading)) {
-      active = "phase1";
-      current = null;
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (fenceMatch && fenceMatch[1][0] === fence.marker && fenceMatch[1].length >= fence.length && !fenceMatch[2].trim()) fence = null;
       continue;
     }
-    if (/\bpart\s*1\b/.test(normalizedHeading) && /\bphase\s*2\b/.test(normalizedHeading)) {
-      active = "phase2";
-      current = null;
-      continue;
-    }
-    if (/\bpart\s*2\b/.test(normalizedHeading)) {
-      active = "part2";
-      current = null;
-      continue;
-    }
-    if (/^#{1,4}\s/.test(line) && active) {
-      active = null;
+    if (fenceMatch) { fence = { marker: fenceMatch[1][0], length: fenceMatch[1].length }; continue; }
+
+    const heading = /^ {0,3}(#{1,6})\s+(.+?)\s*#*\s*$/.exec(line);
+    if (heading) {
+      const level = heading[1].length;
+      const text = heading[2].replace(/[*_`]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+      if (part1Level && level <= part1Level) part1Level = 0;
+      const isPart1 = /^part\s*1\b/.test(text);
+      const phase = /\bphase\s*([12])\b/.exec(text)?.[1];
+      if (phase && (isPart1 || (part1Level && /^phase\s*[12]\b/.test(text)))) {
+        active = phase === "1" ? "phase1" : "phase2";
+        activeLevel = level;
+      } else if (/^part\s*2\b/.test(text)) {
+        active = "part2";
+        activeLevel = level;
+        part1Level = 0;
+      } else if (isPart1) {
+        part1Level = level;
+        active = null;
+      } else if (active && level <= activeLevel) {
+        // Topic subheadings stay inside a section; sibling/parent notes end it.
+        active = null;
+      }
       current = null;
       continue;
     }
     if (!active) continue;
 
     if (active === "part2") {
-      const context = /^\s*\d+\.\s+\*\*\s*(?:情境|Situation)\s*[：:]\s*(.*?)\*\*/i.exec(line);
+      const context = /^\s*(?:\d+[.)]|[-*+])\s+(?:\*{1,2}|_{1,2})?\s*(?:情境|Situation)\s*[：:]\s*(.*?)\s*$/i.exec(line);
       if (context) {
         current = {
           id: `part2-${sections.get("part2")!.groups.length + 1}`,
           number: sections.get("part2")!.groups.length + 1,
-          context: context[1].trim(),
+          context: context[1].replace(/[*_`]/g, "").trim(),
           turns: [],
         };
         sections.get("part2")!.groups.push(current);

@@ -137,6 +137,90 @@ async function parseFixture(baseUrl: string, root: string, markdownContent: stri
   return { filePath, parsed };
 }
 
+test("parse retains KET sections across topic subheadings and excludes later notes", async () => {
+  await withServer(async ({baseUrl, root}) => {
+    const {parsed} = await parseFixture(baseUrl, root, `---
+summary: Part 2 example
+---
+# Practice
+## Part 1 / Phase 1
+### Familiar topics
+1. **Q: What is your name?**（你叫什么？）
+   **A: My name is Alex.**（我叫 Alex。）
+### New topics
+11. **Q: What do you read?**（你读什么？）
+    **A: I read stories.**（我读故事。）
+## Part 1 / Phase 2
+### Daily life
+1. **Q: What did you do?**（你做了什么？）
+   **A: I played a game.**（我玩了游戏。）
+## Part 2
+### Familiar topics
+1. **情境：选择活动**
+   **A: Shall we read?**（我们读书好吗？）
+   **B: Yes, let's read.**（好，我们读书吧。）
+   **A: Great idea.**（好主意。）
+### New topics
+2. **情境：选择食物**
+   **A: Would you like an apple?**（你想吃苹果吗？）
+   **B: Yes, please.**（好的，谢谢。）
+   **A: Here you are.**（给你。）
+## Notes
+**Q: This is an example, not a practice question.**
+**A: Do not import this.**
+`);
+    assert.deepEqual(parsed.sections.map((s:any)=>[s.id,s.groups.length]),[["phase1",2],["phase2",1],["part2",2]]);
+    assert.equal(parsed.itemCount,12);
+    assert.deepEqual(parsed.sections[2].groups.map((g:any)=>g.context),["选择活动","选择食物"]);
+    assert.equal(parsed.sections[0].groups[1].turns[1].text,"I read stories.");
+    assert.equal(parsed.sections[0].groups[0].turns[0].translation,"你叫什么？");
+  });
+});
+
+test("parse accepts plain and emphasized roles, fullwidth colons and nested Part headings", async () => {
+  await withServer(async ({baseUrl, root}) => {
+    const {parsed} = await parseFixture(baseUrl, root, `# Practice
+## Part 1
+### Phase 1
+1) Q：What do you like?
+   A：I like **books** (especially comics).（我喜欢书，尤其是漫画。）
+### Phase 2
+- **Q:** What did you do?（你做了什么？）
+- __A:__ I read a *story*.（我读了一个故事。）
+## Part 2
+### Topics
+1) 情境：选书
+- A: Shall we read?（我们读书好吗？）
+- B：Yes, let's read.（好，我们读书吧。）
+- **A:** Great idea.（好主意。）
+2. Situation: At home
+A: Shall we play (at home)?（我们在家玩吗？）
+__B: Yes.（好。）__
+**A**: Let's play.（一起玩吧。）
+`);
+    assert.deepEqual(parsed.sections.map((s:any)=>[s.id,s.groups.length]),[["phase1",1],["phase2",1],["part2",2]]);
+    assert.equal(parsed.itemCount,10);
+    assert.equal(parsed.sections[0].groups[0].turns[1].text,"I like books (especially comics).");
+    assert.equal(parsed.sections[1].groups[0].turns[1].text,"I read a story.");
+    assert.deepEqual(parsed.sections[2].groups.map((g:any)=>g.context),["选书","At home"]);
+    assert.equal(parsed.sections[2].groups[1].turns[1].translation,"好。");
+  });
+});
+
+test("parse ignores fenced examples and respects deep section boundaries", async () => {
+  await withServer(async ({baseUrl, root}) => {
+    const {parsed} = await parseFixture(baseUrl, root, [
+      "# Practice", "##### **Part 1 / Phase 1**", "###### Topic", "Q: Ready?", "A: Yes.",
+      "```md", "# Part 2", "1. **Situation: Code example**", "**A: Not a turn.**", "```",
+      "~~~markdown", "Q: Also not a turn.", "A: Example.", "~~~",
+      "##### Notes", "Q: Do not import this.", "A: This is a note.",
+    ].join("\n"));
+    assert.equal(parsed.itemCount,2);
+    assert.deepEqual(parsed.sections.map((s:any)=>s.id),["phase1"]);
+    assert.equal(parsed.sections[0].groups[0].turns[0].text,"Ready?");
+  });
+});
+
 async function writeCompleteCache(baseUrl: string, outputDirectory: string, filePath: string, parsed: any, options: { complete?: boolean; materialKey?: string } = {}) {
   const turns = parsed.sections.flatMap((section: any) => section.groups.flatMap((group: any) => group.turns));
   const cacheDirectory = path.join(outputDirectory, "offline-audio");
