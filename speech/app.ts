@@ -11,6 +11,8 @@ import { installUpdateControls } from "./update-controls.ts";
 const TAGS = {
   voice: [
     { id: "clear", label: "清晰自然", prompt: "speaking clearly with natural English pronunciation" },
+    { id: "male", label: "男声", prompt: "a male voice" },
+    { id: "female", label: "女声", prompt: "a female voice" },
     { id: "bright", label: "明亮活泼", prompt: "a bright, lively voice" },
     { id: "youthful", label: "年轻童声", prompt: "a youthful, childlike voice" },
     { id: "warm", label: "温暖亲切", prompt: "a warm, friendly voice" },
@@ -46,6 +48,7 @@ const DEFAULTS = {
   question: ["curious", "rising"],
   answer: ["warm", "clear", "young-learner", "test-style"],
 };
+const EXCLUSIVE_VOICE_TAGS = new Set(["male", "female"]);
 const SETTINGS_KEY = "ket-speaking-mlx-settings-v1";
 const PLAYBACK_MODE_KEY = "ket-speaking-mlx-playback-mode-v1";
 const $ = (selector) => document.querySelector(selector);
@@ -139,9 +142,13 @@ function renderTagGroup(group) {
     button.setAttribute("aria-pressed", String(settings[group].includes(tag.id)));
     button.textContent = tag.label;
     button.addEventListener("click", () => {
-      settings[group] = settings[group].includes(tag.id)
-        ? settings[group].filter((id) => id !== tag.id)
-        : [...settings[group], tag.id];
+      if (settings[group].includes(tag.id)) {
+        settings[group] = settings[group].filter((id) => id !== tag.id);
+      } else if (group === "voice" && EXCLUSIVE_VOICE_TAGS.has(tag.id)) {
+        settings[group] = [...settings[group].filter((id) => !EXCLUSIVE_VOICE_TAGS.has(id)), tag.id];
+      } else {
+        settings[group] = [...settings[group], tag.id];
+      }
       saveSettings();
       renderTagGroup(group);
     });
