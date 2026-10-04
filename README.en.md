@@ -70,7 +70,7 @@ A successful import replaces the active audio pack; a failed validation leaves t
 
 ### Make your own pack
 
-You can ask AI to draft new Markdown questions using the format below, then check that the content suits your child’s level. If you need help, use **联系 Erik (Contact Erik)** in the panel to find me on [LinkedIn](https://www.linkedin.com/in/erik-wu-pmp-csm-15226412/); hover over that link for a short tip. AI-generated text still needs audio generation before it can become a playable pack for Minimal Install.
+You can ask AI to draft new Markdown questions using the format below, then check that the content suits your child’s level. If you need help, use the **question-mark help icon** in the panel to find me on [LinkedIn](https://www.linkedin.com/in/erik-wu-pmp-csm-15226412/); hover for a short tip, or click the icon to open LinkedIn. AI-generated text still needs audio generation before it can become a playable pack for Minimal Install.
 
 On a Mac with **`1` — 完整安装 (Full Install)**:
 
