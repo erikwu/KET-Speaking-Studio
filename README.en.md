@@ -40,7 +40,7 @@ These figures describe downloads and disk space, **not RAM requirements**. Runti
 
 1. On the [GitHub project page](https://github.com/erikwu/KET-Speaking-Studio), choose **Code → Download ZIP**.
 2. Unzip the project into a folder you intend to keep.
-3. Have a `.ketpack.zip` resource pack ready, containing practice material and pre-generated audio. The source download **does not include** practice packs or models. See [where to get materials](#where-to-get-practice-materials) below.
+3. Download the [default practice pack](https://drive.google.com/file/d/1SbQ-aulyipVFaVSg_zly7SvpYDHMWtJb/view?usp=drive_link) (`.ketpack.zip`), or use your own pack. It contains practice material and pre-generated audio and is downloaded separately from the source code. The installer downloads the models.
 
 ### 2. Run the installer
 
@@ -62,11 +62,15 @@ Minimal Install defaults to **离线优先 (Offline First)**. The file/audio set
 
 ### Use an existing pack
 
-Import a pack exported from another Mac with Full Install, or ask a family member or teacher who uses the app to share one. A pack contains Markdown questions, complete audio, and any pictures already generated. It does not contain AI models. The repository currently does not include a ready-made `.ketpack.zip` download.
+Try the [default practice pack on Google Drive](https://drive.google.com/file/d/1SbQ-aulyipVFaVSg_zly7SvpYDHMWtJb/view?usp=drive_link). You can also click **下载默认材料 (Download Default Material)** in the material panel, download the file, then click **导入资源包 (Import Resource Pack)**. Hover over the download link for instructions.
+
+Alternatively, import a pack exported from another Mac with Full Install, or ask a family member or teacher who uses the app to share one. A pack contains Markdown questions, complete audio, and any pictures already generated. It does not contain AI models.
 
 A successful import replaces the active audio pack; a failed validation leaves the previous resources intact. Keep your exported packs if you want to switch between sets of material later.
 
 ### Make your own pack
+
+You can ask AI to draft new Markdown questions using the format below, then check that the content suits your child’s level. If you need help, use **联系 Erik (Contact Erik)** in the panel to find me on [LinkedIn](https://www.linkedin.com/in/erik-wu-pmp-csm-15226412/); hover over that link for a short tip. AI-generated text still needs audio generation before it can become a playable pack for Minimal Install.
 
 On a Mac with **`1` — 完整安装 (Full Install)**:
 

@@ -87,6 +87,10 @@ main { padding-bottom: 18px; }
 .bundle-copy { min-width: 0; display: grid; gap: 4px; }
 .bundle-copy b { color: var(--ink); font-size: 12px; }
 .bundle-copy span { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.bundle-links { display: flex; flex-wrap: wrap; gap: 0 12px; }
+.bundle-links a { display: inline-flex; align-items: center; min-height: 24px; color: var(--primary-dark); font-size: 11px; line-height: 1.45; text-underline-offset: 3px; }
+.bundle-links a:hover { text-decoration-thickness: 2px; }
+.bundle-links a:focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; border-radius: 3px; }
 .bundle-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; gap: 8px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 .path-row { display: flex; align-items: stretch; gap: 10px; }

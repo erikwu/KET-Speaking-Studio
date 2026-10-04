@@ -40,7 +40,7 @@ AI 分数用于练习参考，不是 Cambridge 官方评分，也不评发音或
 
 1. 在[项目首页](https://github.com/erikwu/KET-Speaking-Studio)点击 **Code → Download ZIP**。
 2. 解压到一个固定文件夹。
-3. 准备一份 `.ketpack.zip` 离线资源包，包含练习材料和预生成语音。项目代码下载**不包含**练习资源包或模型；资源包的获取方式见[下一节](#练习材料从哪里来)。
+3. 下载[默认练习资源包](https://drive.google.com/file/d/1SbQ-aulyipVFaVSg_zly7SvpYDHMWtJb/view?usp=drive_link)（`.ketpack.zip`），或准备自己的资源包。资源包包含练习材料和预生成语音，与项目代码分开下载；模型由安装器下载。
 
 ### 2. 运行安装器
 
@@ -62,11 +62,15 @@ AI 分数用于练习参考，不是 Cambridge 官方评分，也不评发音或
 
 ### 已有资源包
 
-可以使用另一台完整安装的 Mac 导出的资源包，或请使用该工具的家人、老师分享。包内包含 Markdown 问答、完整语音，以及已生成的配图；不包含 AI 模型。仓库目前不附带现成的 `.ketpack.zip` 下载。
+先试用[默认练习资源包（Google Drive）](https://drive.google.com/file/d/1SbQ-aulyipVFaVSg_zly7SvpYDHMWtJb/view?usp=drive_link)。也可以在“选择练习材料”面板点击 **下载默认材料**，下载后点击 **导入资源包**。鼠标停在下载链接上可查看操作提示。
+
+还可以使用另一台完整安装的 Mac 导出的资源包，或请使用该工具的家人、老师分享。包内包含 Markdown 问答、完整语音，以及已生成的配图；不包含 AI 模型。
 
 每次导入成功会替换当前活动语音包；校验失败则保留原资源。需要保留多套材料时，请保存各自的资源包，使用时切换导入。
 
 ### 制作自己的资源包
+
+可以让 AI 按下方格式生成新的 Markdown 问答，再自行检查内容是否适合孩子的水平。如需协助，欢迎通过面板里的 **联系 Erik** 在 [LinkedIn](https://www.linkedin.com/in/erik-wu-pmp-csm-15226412/) 找我；鼠标悬停在该入口会显示提示。AI 生成的文字仍需生成语音，才能制作可在最小安装中播放的资源包。
 
 在一台选择 **`1` — 完整安装** 的 Mac 上：
 
