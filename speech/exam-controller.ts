@@ -870,11 +870,13 @@ export function installExamController({ getSections, getExamAvailability, speakT
     overviewCards.className = "exam-summary-overview-cards";
     for (const sectionId of ["phase1", "phase2", "part2"]) {
       const data = summary.bySection[sectionId];
+      const expectedCount = data.scoredCount + data.uncompletedCount;
+      const isComplete = data.uncompletedCount === 0;
       const card = document.createElement("article");
-      card.className = "exam-summary-overview-card";
+      card.className = `exam-summary-overview-card${isComplete ? "" : " is-incomplete"}`;
       addText(card, "span", "exam-summary-overview-label", SECTION_NAMES[sectionId]);
-      addText(card, "strong", "exam-summary-overview-score", `${formatAverage(data.averages.total)} / 20`);
-      addText(card, "span", "exam-summary-overview-meta", `已评分 ${data.scoredCount} · 未完成 ${data.uncompletedCount} · 提示 ${data.hintCount} 次`);
+      addText(card, "strong", `exam-summary-overview-score${isComplete ? "" : " is-incomplete"}`, isComplete ? `${formatAverage(data.averages.total)} / 20` : "未完成");
+      addText(card, "span", "exam-summary-overview-meta", `已评分 ${data.scoredCount} / ${expectedCount} · 未完成 ${data.uncompletedCount} · 提示 ${data.hintCount} 次`);
       overviewCards.append(card);
     }
     overview.append(overviewCards);
@@ -885,8 +887,10 @@ export function installExamController({ getSections, getExamAvailability, speakT
       const data = summary.bySection[sectionId];
       const averages = data.averages;
       addText(section, "h4", "", SECTION_NAMES[sectionId]);
-      addText(section, "p", "exam-summary-stats", `已评分 ${data.scoredCount} · 未完成 ${data.uncompletedCount} · 提示 ${data.hintCount} 次`);
-      addText(section, "p", "exam-summary-averages", `平均分：切题 ${formatAverage(averages.relevance)} · 完整 ${formatAverage(averages.completeness)} · 语法 ${formatAverage(averages.grammar)} · 词汇 ${formatAverage(averages.vocabulary)} · 总分 ${formatAverage(averages.total)} / 20`);
+      const expectedCount = data.scoredCount + data.uncompletedCount;
+      const isComplete = data.uncompletedCount === 0;
+      addText(section, "p", "exam-summary-stats", `已评分 ${data.scoredCount} / ${expectedCount} · 未完成 ${data.uncompletedCount} · 提示 ${data.hintCount} 次`);
+      addText(section, "p", "exam-summary-averages", `${isComplete ? "阶段平均分" : "已评分题均分"}：切题 ${formatAverage(averages.relevance)} · 完整 ${formatAverage(averages.completeness)} · 语法 ${formatAverage(averages.grammar)} · 词汇 ${formatAverage(averages.vocabulary)} · 总分 ${formatAverage(averages.total)} / 20`);
       const items = document.createElement("div");
       items.className = "exam-summary-items";
       for (const record of [...responseRecords.values()].filter((item) => item.sectionId === sectionId)) {

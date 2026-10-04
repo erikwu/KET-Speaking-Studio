@@ -343,8 +343,10 @@ footer span:last-child { max-width: 48%; overflow: hidden; text-overflow: ellips
 .exam-summary-overview h4 { margin: 0; color: var(--ink); font-size: 13px; }
 .exam-summary-overview-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-top: 9px; }
 .exam-summary-overview-card { min-width: 0; display: grid; gap: 4px; padding: 10px; border: 1px solid #e2e5f2; border-radius: 11px; background: #fff; }
+.exam-summary-overview-card.is-incomplete { border-color: #ead9bb; background: #fffaf1; }
 .exam-summary-overview-label { color: var(--muted); font-size: 10px; font-weight: 700; }
 .exam-summary-overview-score { color: var(--ink); font: 750 17px var(--mono); font-variant-numeric: tabular-nums; }
+.exam-summary-overview-score.is-incomplete { color: #805521; font-family: inherit; font-size: 14px; font-weight: 750; }
 .exam-summary-overview-meta { color: var(--muted); font-size: 9px; line-height: 1.45; }
 .exam-summary-section { padding: 14px 0; border-bottom: 1px solid var(--line); }
 .exam-summary-section h4 { margin: 0; color: var(--ink); font-size: 13px; }
